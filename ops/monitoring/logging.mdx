@@ -1,0 +1,229 @@
+---
+title: "Structured Logging: Standards, Levels, and Querying"
+sidebarTitle: "Logging"
+description: "Logging standards for all services — required JSON format, log levels, PII rules, how to implement structured logging in Node.js and Python, and querying in Datadog."
+---
+
+Consistent, structured logging is what separates a system you can debug in minutes from one you spend hours grepping through. Every service in our stack writes JSON-structured logs to stdout, and the Datadog agent ships them with trace correlation intact. Follow the standards on this page and your logs will be queryable, filterable, and linked to traces automatically from day one.
+
+## Log Format
+
+All log lines must be valid JSON objects written to stdout. The required shape is:
+
+```json
+{
+  "timestamp": "2024-11-15T14:23:01.456Z",
+  "level": "info",
+  "service": "api-gateway",
+  "traceId": "4bf92f3577b34da6a3ce929d0e0e4736",
+  "spanId": "00f067aa0ba902b7",
+  "message": "Request completed",
+  "httpMethod": "GET",
+  "httpPath": "/api/v1/orders",
+  "httpStatus": 200,
+  "durationMs": 43
+}
+```
+
+The Datadog log pipeline is configured to parse this structure automatically. Fields outside the schema are passed through as additional attributes and are fully queryable. Do not nest context more than one level deep — flat structures are faster to index and easier to query.
+
+## Log Levels
+
+Use the correct level for each situation. Misusing levels is one of the most common sources of alert noise and query pollution.
+
+| Level | When to use | Production? |
+|---|---|---|
+| `error` | An actionable failure occurred — something a human should investigate or that will impact users. Always include the error message and stack trace. | ✅ Yes |
+| `warn` | The system is in a degraded or unexpected state but is still functioning. Examples: a cache miss that falls back to the database, a retried request that eventually succeeded. | ✅ Yes |
+| `info` | A significant, expected event in the normal lifecycle. Examples: server started, request completed, background job finished, feature flag evaluated. | ✅ Yes |
+| `debug` | Detailed internal state useful during development or targeted debugging. Never log at `debug` in production — it generates too much volume, inflates your Datadog bill, and can expose sensitive internals. | ❌ No |
+
+Set the log level via the `LOG_LEVEL` environment variable. The default in production is `info`. To temporarily enable `debug` in production for an investigation, create a PagerDuty maintenance window first, set `LOG_LEVEL=debug` on the deployment, and revert it within 30 minutes.
+
+## Required Fields
+
+Every log line must include these fields regardless of context:
+
+| Field | Format | Source |
+|---|---|---|
+| `timestamp` | ISO 8601 with milliseconds and timezone — `2024-11-15T14:23:01.456Z` | Logger |
+| `level` | Lowercase string — `error`, `warn`, `info`, `debug` | Logger |
+| `service` | The service name matching the Datadog service tag — e.g., `api-gateway` | Config / env var |
+| `traceId` | 32-character hex string from OpenTelemetry span context | OTel SDK / logger integration |
+
+The `traceId` field is what links a log line to a distributed trace in Datadog APM. Both of the logger setups below inject it automatically when you configure the OTel integration correctly.
+
+## Implementing Structured Logging
+
+<Tabs>
+  <Tab title="Node.js (pino)">
+    Use `pino` as the logger. It writes JSON by default, is the fastest Node.js logger available, and integrates with the OpenTelemetry SDK to inject trace context automatically.
+
+    ```bash
+    npm install pino pino-datadog-transport
+    ```
+
+    ```typescript
+    // src/lib/logger.ts
+    import pino from 'pino';
+
+    const logger = pino({
+      level: process.env.LOG_LEVEL ?? 'info',
+      base: {
+        service: process.env.SERVICE_NAME ?? 'unknown-service',
+        env: process.env.NODE_ENV ?? 'development',
+      },
+      timestamp: pino.stdTimeFunctions.isoTime,
+      formatters: {
+        level(label) {
+          return { level: label };
+        },
+      },
+      mixin() {
+        // Inject OpenTelemetry trace context into every log line
+        const { context } = require('@opentelemetry/api');
+        const span = context.active()?.getValue(
+          require('@opentelemetry/api').INVALID_SPAN_CONTEXT
+        );
+        if (span?.spanContext) {
+          const { traceId, spanId } = span.spanContext();
+          return { traceId, spanId };
+        }
+        return {};
+      },
+    });
+
+    export default logger;
+    ```
+
+    ```typescript
+    // Usage
+    import logger from './lib/logger';
+
+    // Info — key lifecycle event
+    logger.info({ httpMethod: 'POST', httpPath: '/api/orders', userId: req.user.id }, 'Order created');
+
+    // Error — always include the error object so the stack trace is captured
+    logger.error({ err, orderId }, 'Failed to process payment');
+
+    // Warn — degraded but functional
+    logger.warn({ cacheKey, durationMs }, 'Cache miss — falling back to database');
+    ```
+  </Tab>
+  <Tab title="Python (structlog)">
+    Use `structlog` as the logger. It provides a composable processor pipeline that makes it straightforward to inject context and format output as JSON.
+
+    ```bash
+    pip install structlog opentelemetry-api
+    ```
+
+    ```python
+    # app/lib/logger.py
+    import logging
+    import os
+    import structlog
+    from opentelemetry import trace
+
+    def add_trace_context(logger, method, event_dict):
+        """Inject the current OpenTelemetry trace and span IDs."""
+        span = trace.get_current_span()
+        if span and span.is_recording():
+            ctx = span.get_span_context()
+            event_dict["traceId"] = format(ctx.trace_id, "032x")
+            event_dict["spanId"] = format(ctx.span_id, "016x")
+        return event_dict
+
+    def add_service_context(logger, method, event_dict):
+        event_dict["service"] = os.getenv("SERVICE_NAME", "unknown-service")
+        event_dict["env"] = os.getenv("ENV", "development")
+        return event_dict
+
+    structlog.configure(
+        processors=[
+            structlog.stdlib.add_log_level,
+            structlog.stdlib.add_logger_name,
+            structlog.processors.TimeStamper(fmt="iso", utc=True, key="timestamp"),
+            add_service_context,
+            add_trace_context,
+            structlog.processors.dict_tracebacks,
+            structlog.processors.JSONRenderer(),
+        ],
+        wrapper_class=structlog.make_filtering_bound_logger(
+            logging.getLevelName(os.getenv("LOG_LEVEL", "INFO").upper())
+        ),
+        context_class=dict,
+        logger_factory=structlog.PrintLoggerFactory(),
+    )
+
+    log = structlog.get_logger()
+    ```
+
+    ```python
+    # Usage
+    from app.lib.logger import log
+
+    # Info — bind request context once, reuse throughout the request
+    request_log = log.bind(http_method="POST", http_path="/api/orders", user_id=user.id)
+    request_log.info("order_created", order_id=order.id)
+
+    # Error — pass the exception; dict_tracebacks processor formats the stack
+    try:
+        process_payment(order)
+    except PaymentError as exc:
+        request_log.error("payment_failed", order_id=order.id, exc_info=exc)
+
+    # Warn
+    log.warn("cache_miss", cache_key=key, duration_ms=elapsed)
+    ```
+  </Tab>
+</Tabs>
+
+## PII and Sensitive Data in Logs
+
+Never log the following:
+
+- Authentication tokens, API keys, or session identifiers.
+- Passwords, secrets, or credentials of any kind.
+- Full credit card numbers, bank account numbers, or CVV codes.
+- Government-issued identification numbers (SSN, passport, etc.).
+- Full names combined with contact details, health data, or financial data.
+- OAuth codes or refresh tokens.
+
+If you need to log a reference to a user for debugging, log only the internal numeric or UUID identifier — never the email address, phone number, or full name. If you find PII in an existing log query, report it to the security team immediately and open a PR to remove it from the logging call site.
+
+## Querying Logs in Datadog
+
+Open the [Datadog Log Explorer](https://app.datadoghq.com/logs) and use the search bar. The query language supports attribute filters, boolean operators, and wildcards.
+
+Common queries to bookmark:
+
+```
+# All errors for a specific service in the last hour
+service:api-gateway status:error
+
+# Slow requests (requires durationMs to be logged)
+service:api-gateway @durationMs:>500
+
+# Errors for a specific trace (paste the traceId from APM)
+service:api-gateway @traceId:4bf92f3577b34da6a3ce929d0e0e4736
+
+# All warn and error logs across all services in production
+env:production (status:warn OR status:error)
+
+# Errors from a specific endpoint
+service:api-gateway status:error @httpPath:"/api/v1/orders"
+
+# Logs from a specific pod
+host:api-gateway-6d8fb7b5c9-xk2p4
+```
+
+Use **Saved Views** to store queries you run regularly — click the bookmark icon next to the search bar. Saved views are shared across the team.
+
+## Log Retention
+
+| Tier | Duration | Storage |
+|---|---|---|
+| Hot (Datadog indexed) | 30 days | Datadog — fully queryable with live search |
+| Cold (archive) | 1 year | S3 (`s3://your-org-log-archive/`) |
+
+After 30 days, logs are flushed from Datadog's index but remain in S3. To query cold logs, use the **Datadog Log Rehydration** feature — open Log Explorer, click **Rehydrate from Archive**, select the time range and index filter, and wait for the rehydration job to complete (typically 10–30 minutes depending on volume). Rehydrated logs are billed separately from indexed logs, so scope your time range as narrowly as possible.

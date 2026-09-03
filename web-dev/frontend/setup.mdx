@@ -1,0 +1,104 @@
+---
+title: "Setting Up a New Frontend Project from Scratch"
+sidebarTitle: "Setup"
+description: "Bootstrap a new React, TypeScript, and Vite project from the team template, configure your environment, and verify your setup is working end-to-end."
+---
+
+Every new frontend project at the org starts from a shared template repository that pre-configures Vite, TypeScript, ESLint, Prettier, and our standard folder structure. Following these steps ensures your local environment matches CI and every other developer on the team before you write a single line of feature code.
+
+<Note>
+  This project requires **Node.js 20 LTS**. Running any other major version may cause dependency resolution errors or unexpected test failures. Check your current version with `node --version` before proceeding.
+</Note>
+
+<Tip>
+  Use [nvm](https://github.com/nvm-sh/nvm) or [fnm](https://github.com/Schniz/fnm) to manage Node versions across projects. Place a `.nvmrc` file containing `20` in any project root and run `nvm use` (or `fnm use`) to switch automatically. `fnm` is the faster option and works on all major platforms.
+</Tip>
+
+<Steps>
+  <Step title="Clone the frontend template repository">
+    Clone the shared template from the organisation's GitHub. Replace `my-project` with your actual project name.
+
+    ```bash
+    git clone https://github.com/your-org/frontend-template.git my-project
+    cd my-project
+    ```
+
+    After cloning, remove the existing git history and initialise a fresh repository so your project starts with a clean commit graph.
+
+    ```bash
+    rm -rf .git
+    git init
+    git add .
+    git commit -m "chore: initialise project from frontend-template"
+    ```
+  </Step>
+
+  <Step title="Install dependencies">
+    Install all Node dependencies declared in `package.json`. The template uses a pinned `package-lock.json`, so always use `npm install` (not `npm ci`) for the initial local setup — `npm ci` is reserved for CI environments.
+
+    ```bash
+    npm install
+    ```
+
+    You should see no audit errors at this stage. If you do, raise a ticket so the template can be updated rather than resolving them locally.
+  </Step>
+
+  <Step title="Configure your local environment variables">
+    Copy the example environment file and populate the required values. The `.env.local` file is gitignored and should never be committed.
+
+    ```bash
+    cp .env.example .env.local
+    ```
+
+    Open `.env.local` and fill in each value. The file is annotated with comments explaining every variable:
+
+    ```bash
+    # .env.local — do NOT commit this file
+
+    VITE_API_BASE_URL=https://api.dev.your-org.internal
+    VITE_AUTH_CLIENT_ID=your-dev-client-id
+    VITE_SENTRY_DSN=           # leave blank for local dev
+    VITE_FEATURE_FLAG_KEY=dev
+    ```
+
+    All Vite environment variables must be prefixed with `VITE_` to be exposed to client-side code. Variables without this prefix are silently ignored at build time.
+  </Step>
+
+  <Step title="Start the development server">
+    Run the Vite dev server. It starts on port `5173` by default and supports Hot Module Replacement (HMR) out of the box.
+
+    ```bash
+    npm run dev
+    ```
+
+    You should see output similar to:
+
+    ```
+    VITE v5.x.x  ready in 312 ms
+
+    ➜  Local:   http://localhost:5173/
+    ➜  Network: use --host to expose
+    ➜  press h + enter to show help
+    ```
+
+    Open [http://localhost:5173](http://localhost:5173) in your browser. The template renders a simple health-check page confirming the API base URL it is pointed at.
+  </Step>
+
+  <Step title="Verify linting and tests pass">
+    Before writing any code, confirm that the baseline linting and test suite are green. If either fails on a fresh clone, stop and raise it with the team — the template should always be in a passing state.
+
+    Run the linter:
+
+    ```bash
+    npm run lint
+    ```
+
+    Run the test suite:
+
+    ```bash
+    npm run test
+    ```
+
+    Both commands should exit with code `0`. The test command runs Vitest in run mode (single pass, no watch). For interactive development use `npm run test:watch` instead.
+  </Step>
+</Steps>

@@ -1,0 +1,250 @@
+---
+title: "Database Usage: PostgreSQL Patterns and Best Practices"
+sidebarTitle: "Database Usage"
+description: "Team standards for working with PostgreSQL — ORM choice, migration workflow, query performance, connection pooling, and safe transaction patterns."
+---
+
+All backend services use PostgreSQL as the primary relational store. We standardise on a small set of tools and patterns so that migrations stay reproducible, queries stay performant, and no one accidentally destroys production data. Read this page before writing any schema changes or database queries.
+
+<Warning>
+  Never run `DROP TABLE`, `TRUNCATE`, or any other destructive DDL directly on the production database. All schema changes must go through the migration tooling described below, and any destructive operation must be accompanied by a written runbook reviewed in `#backend` before execution.
+</Warning>
+
+## ORM Usage
+
+Choose the ORM that matches your service's stack. Do not introduce a third ORM without a decision record.
+
+<Tabs>
+  <Tab title="Node.js — Prisma">
+    Prisma is the standard ORM for all Node.js services. Define your schema in `prisma/schema.prisma` and let Prisma generate the type-safe client.
+
+    ```prisma
+    // prisma/schema.prisma
+    model UserProfile {
+      id        Int      @id @default(autoincrement())
+      email     String   @unique
+      name      String
+      role      String   @default("viewer")
+      createdAt DateTime @default(now())
+      updatedAt DateTime @updatedAt
+
+      @@index([role])           // index for common filter
+    }
+    ```
+
+    Query example:
+
+    ```typescript
+    import { PrismaClient } from '@prisma/client';
+
+    const prisma = new PrismaClient();
+
+    // Fetch a page of editors, cursor-based
+    const profiles = await prisma.userProfile.findMany({
+      where: { role: 'editor' },
+      take: 20,
+      skip: cursor ? 1 : 0,
+      cursor: cursor ? { id: cursor } : undefined,
+      orderBy: { id: 'asc' },
+    });
+    ```
+  </Tab>
+  <Tab title="Python — SQLAlchemy">
+    SQLAlchemy (async, 2.x style) is the standard ORM for all Python services. Define models in `app/models/` and use `async_sessionmaker` for all database access.
+
+    ```python
+    # app/models/user_profile.py
+    from sqlalchemy import String, Index
+    from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+    from datetime import datetime
+
+    class Base(DeclarativeBase):
+        pass
+
+    class UserProfile(Base):
+        __tablename__ = "user_profiles"
+
+        id: Mapped[int] = mapped_column(primary_key=True)
+        email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+        name: Mapped[str] = mapped_column(String(255), nullable=False)
+        role: Mapped[str] = mapped_column(String(50), default="viewer", nullable=False)
+        created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+
+        __table_args__ = (
+            Index("ix_user_profiles_role", "role"),  # index for common filter
+        )
+    ```
+
+    Query example:
+
+    ```python
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    async def get_editors(session: AsyncSession, cursor: int | None, limit: int = 20):
+        stmt = (
+            select(UserProfile)
+            .where(UserProfile.role == "editor")
+            .order_by(UserProfile.id)
+            .limit(limit)
+        )
+        if cursor:
+            stmt = stmt.where(UserProfile.id > cursor)
+
+        result = await session.execute(stmt)
+        return result.scalars().all()
+    ```
+  </Tab>
+</Tabs>
+
+## Migration Workflow
+
+Follow these rules every time you change the schema.
+
+- **Never edit an existing migration file.** Once a migration is committed and merged, treat it as immutable. Editing it causes checksum failures and breaks other developers' environments.
+- **Always create a new migration** to make changes, even small ones like adding a column default.
+- **Name migrations descriptively.** Use `add_role_to_user_profiles` not `update_users`.
+
+<Tabs>
+  <Tab title="Node.js — Prisma">
+    After editing `schema.prisma`, generate and apply the migration:
+
+    ```bash
+    # Creates a new timestamped migration file and applies it locally
+    npx prisma migrate dev --name add_role_to_user_profiles
+    ```
+
+    To apply migrations in CI/production without generating new files:
+
+    ```bash
+    npx prisma migrate deploy
+    ```
+
+    Generated migration file (do not edit after creation):
+
+    ```sql
+    -- prisma/migrations/20240514102301_add_role_to_user_profiles/migration.sql
+    ALTER TABLE "UserProfile" ADD COLUMN "role" TEXT NOT NULL DEFAULT 'viewer';
+    CREATE INDEX "UserProfile_role_idx" ON "UserProfile"("role");
+    ```
+  </Tab>
+  <Tab title="Python — Alembic">
+    After editing your SQLAlchemy models, auto-generate a migration:
+
+    ```bash
+    alembic revision --autogenerate -m "add_role_to_user_profiles"
+    ```
+
+    Review the generated file in `alembic/versions/` before applying — autogenerate is not always perfect, especially for index changes. Then apply:
+
+    ```bash
+    alembic upgrade head
+    ```
+
+    Generated migration file (review, then leave untouched):
+
+    ```python
+    # alembic/versions/20240514_102301_add_role_to_user_profiles.py
+    def upgrade() -> None:
+        op.add_column(
+            "user_profiles",
+            sa.Column("role", sa.String(50), nullable=False, server_default="viewer"),
+        )
+        op.create_index("ix_user_profiles_role", "user_profiles", ["role"])
+
+    def downgrade() -> None:
+        op.drop_index("ix_user_profiles_role", table_name="user_profiles")
+        op.drop_column("user_profiles", "role")
+    ```
+  </Tab>
+</Tabs>
+
+## Query Performance
+
+Slow queries are the most common source of backend latency. Follow these practices from the start rather than retroactively.
+
+**Add indexes proactively for:**
+- Every foreign key column (Postgres does not index these automatically).
+- Any column you filter by frequently in `WHERE` clauses (`status`, `role`, `created_at` ranges, etc.).
+- Composite indexes when you consistently filter on two columns together.
+
+**Analyse slow queries with `EXPLAIN ANALYZE`:**
+
+```sql
+EXPLAIN (ANALYZE, BUFFERS, FORMAT TEXT)
+SELECT *
+FROM user_profiles
+WHERE role = 'editor'
+ORDER BY id
+LIMIT 20;
+```
+
+Look for `Seq Scan` on large tables — that's usually a missing index. Target `Index Scan` or `Index Only Scan`. Bring unoptimised queries to `#backend` with the `EXPLAIN ANALYZE` output before shipping.
+
+<Tip>
+  Install the `pg_stat_statements` extension in your local Postgres instance to identify the highest-impact queries: `SELECT query, total_exec_time, calls FROM pg_stat_statements ORDER BY total_exec_time DESC LIMIT 20;`
+</Tip>
+
+## Connection Pooling
+
+All services connect to PostgreSQL through **PgBouncer**, not directly to the database. The connection string in your `.env` should always point at the PgBouncer host.
+
+```bash
+# ✅ Correct — points at PgBouncer
+DATABASE_URL=postgresql://app_user:secret@pgbouncer:5432/my_service
+
+# ❌ Wrong — bypasses PgBouncer
+DATABASE_URL=postgresql://app_user:secret@postgres-primary:5432/my_service
+```
+
+Configure your application connection pool conservatively:
+
+| Setting | Value |
+|---------|-------|
+| Max pool size | `10` |
+| Idle timeout | `30s` |
+| Connection timeout | `5s` |
+
+PgBouncer runs in **transaction mode**, which means you must not use session-level features (`SET LOCAL`, advisory locks, `LISTEN/NOTIFY`) unless you have explicitly switched a pool to session mode and discussed it with `#platform`.
+
+## Transactions
+
+Wrap any sequence of writes that must succeed or fail together in a single transaction. Never perform multi-step writes outside a transaction — a crash between steps will leave the database in an inconsistent state.
+
+<Tabs>
+  <Tab title="Node.js — Prisma">
+    ```typescript
+    await prisma.$transaction(async (tx) => {
+      const order = await tx.order.create({
+        data: { userId, status: 'pending', total },
+      });
+
+      await tx.inventoryItem.update({
+        where: { id: itemId },
+        data: { reservedQty: { increment: quantity } },
+      });
+
+      await tx.auditLog.create({
+        data: { action: 'ORDER_CREATED', resourceId: order.id },
+      });
+    });
+    ```
+  </Tab>
+  <Tab title="Python — SQLAlchemy">
+    ```python
+    async with session.begin():
+        order = Order(user_id=user_id, status="pending", total=total)
+        session.add(order)
+        await session.flush()  # get order.id before committing
+
+        await session.execute(
+            update(InventoryItem)
+            .where(InventoryItem.id == item_id)
+            .values(reserved_qty=InventoryItem.reserved_qty + quantity)
+        )
+
+        session.add(AuditLog(action="ORDER_CREATED", resource_id=order.id))
+    # session.begin() commits automatically on exit; rolls back on exception
+    ```
+  </Tab>
+</Tabs>

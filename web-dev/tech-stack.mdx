@@ -1,0 +1,124 @@
+---
+title: "Our Tech Stack: Languages, Frameworks, and Tools"
+sidebarTitle: "Tech Stack"
+description: "A reference guide to every approved language, framework, database, and infrastructure tool used across our web platform and internal services."
+---
+
+This page is the canonical reference for our approved tech stack. Before starting a new project or adding a dependency to an existing one, check here first. Using tools and libraries that appear on this list means you get team support, shared configuration, established patterns, and a faster path through code review. Everything outside this list requires an approval conversation before it lands in production.
+
+## Stack Overview
+
+<CardGroup cols={2}>
+  <Card title="Frontend" icon="browser">
+    **React 18** with **TypeScript** is the standard for all user-facing web applications. Use **Vite** as the build tool and dev server. **Tailwind CSS** handles styling, and **React Query (TanStack Query)** manages server state, caching, and background refetching.
+
+    - React 18 + TypeScript
+    - Vite (build tool & dev server)
+    - Tailwind CSS (utility-first styling)
+    - TanStack Query v5 (server state management)
+    - React Router v6 (client-side routing)
+    - Zod (runtime schema validation)
+  </Card>
+  <Card title="Backend" icon="server">
+    Service type determines the backend language. Use **Node.js with Express** for lightweight API gateways, BFF (backend-for-frontend) layers, and real-time services. Use **Python with FastAPI** for data-intensive services, ML pipelines, or services that call into Python-native libraries.
+
+    - Node.js 20 LTS + Express 5 (API gateways, BFF)
+    - Python 3.12 + FastAPI (data services, ML workloads)
+    - Pydantic v2 (Python data validation)
+    - Prisma ORM (Node.js database access)
+    - SQLAlchemy 2 (Python database access)
+  </Card>
+  <Card title="Databases" icon="database">
+    **PostgreSQL** is the primary data store for all persistent, relational data. Use **Redis** for caching, ephemeral session data, and background job queues. Do not introduce a second relational database without an approved architecture decision record.
+
+    - PostgreSQL 16 (primary persistent store)
+    - Redis 7 (caching, sessions, queues)
+    - BullMQ (Node.js job queue — backed by Redis)
+    - Celery + Redis (Python job queue)
+    - pgvector (PostgreSQL extension for embeddings)
+  </Card>
+  <Card title="Infrastructure" icon="cloud">
+    All services run in **Docker** containers orchestrated by **Kubernetes**. CI/CD is handled entirely through **GitHub Actions**. Infrastructure-as-code is written in Terraform for cloud resources and Helm charts for Kubernetes manifests.
+
+    - Docker + Docker Compose (local development)
+    - Kubernetes (production orchestration)
+    - GitHub Actions (CI/CD pipelines)
+    - Terraform (cloud infrastructure)
+    - Helm (Kubernetes manifest templating)
+    - AWS (primary cloud provider)
+  </Card>
+  <Card title="Observability" icon="chart-line">
+    **Datadog** is the single pane of glass for logs, metrics, traces, and dashboards. **PagerDuty** handles on-call alerting and incident escalation. All services must emit structured JSON logs and instrument their key operations with APM traces.
+
+    - Datadog (logs, metrics, APM, dashboards)
+    - PagerDuty (on-call and incident management)
+    - Datadog Synthetic Tests (uptime monitoring)
+    - OpenTelemetry SDK (trace instrumentation)
+  </Card>
+  <Card title="Developer Tooling" icon="wrench">
+    Standardised tooling ensures consistent developer experience across machines. These tools are installed and configured as part of the repo setup script.
+
+    - ESLint + Prettier (JS/TS linting & formatting)
+    - Ruff + Black (Python linting & formatting)
+    - pre-commit (local hook runner)
+    - Vitest (unit & integration tests for TS)
+    - pytest (unit & integration tests for Python)
+    - Playwright (end-to-end browser tests)
+  </Card>
+</CardGroup>
+
+## Approved Package Managers
+
+Use the correct package manager for each ecosystem. Do not mix package managers within a single project (for example, do not use both `npm` and `yarn` in the same repo — pick one and commit a lockfile).
+
+| Ecosystem | Approved Package Manager | Lockfile |
+|---|---|---|
+| Node.js | `npm` (v10+) | `package-lock.json` |
+| Python (application) | `pip` + `poetry` | `poetry.lock` |
+| Python (scripts / tooling) | `pip` with `requirements.txt` | `requirements.txt` (pinned) |
+
+For **Node.js** projects, always commit `package-lock.json`. Never delete or regenerate the lockfile unless you are intentionally upgrading dependencies, and call that out explicitly in your PR description.
+
+For **Python** application projects, use **Poetry** to declare and lock dependencies in `pyproject.toml` and `poetry.lock`. Use bare `pip` with a pinned `requirements.txt` only for lightweight tooling scripts that don't warrant a full project structure.
+
+<Tip>
+Run `npm ci` instead of `npm install` in CI pipelines and Docker builds. It installs directly from the lockfile, is faster, and fails loudly if the lockfile is out of sync with `package.json`.
+</Tip>
+
+## Choosing Between Node.js and Python
+
+When starting a new backend service, use the following decision guide to pick the right runtime.
+
+<Accordion title="When to use Node.js / Express">
+Choose Node.js when your service is primarily:
+
+- A **BFF (backend-for-frontend)** that aggregates calls to downstream APIs and shapes data for a React frontend
+- A **real-time service** (WebSockets, server-sent events) where Node's event loop is an asset
+- A **lightweight REST or GraphQL API** with straightforward CRUD operations and business logic
+- Sharing **TypeScript types or validation schemas** with the frontend codebase
+
+Node.js services should use **Prisma** for database access and **BullMQ** for background jobs.
+</Accordion>
+
+<Accordion title="When to use Python / FastAPI">
+Choose Python when your service is primarily:
+
+- **Data-intensive** — processing large volumes of records, running analytical queries, or doing batch transformations
+- **ML or AI workloads** — calling into libraries like `scikit-learn`, `transformers`, `langchain`, or `numpy`
+- **Tightly integrated with Python-native tooling** that has no viable Node.js equivalent
+- A **scripted pipeline** (ETL, report generation, data migration) where Python's ecosystem is the natural fit
+
+Python services should use **SQLAlchemy 2** for database access and **Celery** for background jobs.
+</Accordion>
+
+## Adding a New Dependency
+
+Before adding any package that is not already present in the codebase, ask yourself three questions:
+
+1. **Is there an approved alternative already in the stack?** Check this page and the existing `package.json` / `pyproject.toml` before reaching for something new.
+2. **Is the package actively maintained?** Check the GitHub repository for recent commits, open issues, and the number of weekly downloads.
+3. **What is the licence?** MIT, Apache 2.0, and BSD licences are generally fine. GPL licences require a conversation before use. AGPL licences are not permitted without explicit approval.
+
+<Warning>
+Do not merge a PR that introduces an unapproved dependency. If you want to add a library, tool, or framework that is not on this page, open a discussion in the **#engineering-decisions** Slack channel first. Describe what you need, why the current stack doesn't cover it, and which package you are proposing. Once the team reaches consensus and a decision is recorded, this page will be updated. Unapproved dependencies found during review will be removed and the PR sent back for rework.
+</Warning>

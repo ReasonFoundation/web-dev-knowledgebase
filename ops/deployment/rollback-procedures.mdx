@@ -1,0 +1,126 @@
+---
+title: "Rollback Procedures: Reverting a Bad Production Deploy"
+sidebarTitle: "Rollback Procedures"
+description: "When and how to roll back a production deployment — covering ArgoCD fast rollback, kubectl fallback, database migration reversal, and post-rollback steps."
+---
+
+Rolling back quickly is more important than understanding the root cause in the moment. If a deployment is causing harm to users, your first priority is to restore the previous known-good state; the investigation happens afterwards. This page gives you a clear decision framework for when to roll back and the exact steps to execute each rollback path.
+
+## When to Roll Back
+
+Initiate a rollback without waiting for further investigation if any of the following conditions are true:
+
+- **Error rate** exceeds 1% and has been elevated for more than 2 minutes since the deployment.
+- **p99 latency** is more than 2× the pre-deployment baseline.
+- **Critical functionality** is broken — checkout, authentication, data writes, or any path marked P1 in the runbook.
+- **Pod restart loop** — any pod restarting more than 3 times in 5 minutes.
+
+If you are unsure, roll back first. A brief outage from an unnecessary rollback is cheaper than an extended incident.
+
+## Path 1 — Fast Rollback via ArgoCD (Preferred)
+
+This is the fastest path. It reverts the `k8s-manifests` change and lets ArgoCD reconcile the cluster back to the previous state.
+
+<Steps>
+  <Step title="Identify the previous good commit in k8s-manifests">
+    Navigate to the `k8s-manifests` repository on GitHub. Open `prod/<service-name>/deployment.yaml` and view the commit history. Find the commit immediately before the one merged for this release — copy its SHA.
+  </Step>
+  <Step title="Revert the manifest commit">
+    ```bash
+    git clone git@github.com:your-org/k8s-manifests.git
+    cd k8s-manifests
+    git revert <bad-commit-sha> --no-edit
+    git push origin main
+    ```
+
+    Alternatively, use the GitHub UI: open the bad commit, click **Revert**, and merge the resulting PR immediately. Bypass the normal review requirement if the incident is active — note the bypass in the PR description.
+  </Step>
+  <Step title="Trigger ArgoCD sync">
+    Open the [ArgoCD dashboard](https://argocd.internal.example.com), navigate to the affected app (e.g., `prod-api-gateway`), and click **Sync → Synchronize**. ArgoCD will immediately begin replacing pods with the reverted image.
+  </Step>
+  <Step title="Confirm rollout completes">
+    Watch the ArgoCD app status until it shows **Synced / Healthy**. Verify in Datadog that the error rate and latency return to baseline. Run the following to confirm the previous image tag is live:
+
+    ```bash
+    kubectl get pods -n production -l app=<service-name> \
+      -o jsonpath='{range .items[*]}{.spec.containers[0].image}{"\n"}{end}'
+    ```
+  </Step>
+</Steps>
+
+## Path 2 — Rollback via kubectl (Last Resort)
+
+Use this path only if the `k8s-manifests` repo is inaccessible, ArgoCD is degraded, or you need to act faster than a git push allows. Note that a kubectl rollback will be overwritten the next time ArgoCD syncs, so you **must** also revert the manifest (Path 1, steps 1–2) immediately after stabilising.
+
+```bash
+# Roll back the deployment to the previous ReplicaSet
+kubectl rollout undo deployment/<service-name> -n production
+
+# Verify the rollout is complete
+kubectl rollout status deployment/<service-name> -n production
+
+# Confirm the image tag that is now running
+kubectl get deployment <service-name> -n production \
+  -o jsonpath='{.spec.template.spec.containers[0].image}'
+```
+
+If you need to roll back to a specific revision rather than the immediately previous one, list available revisions first:
+
+```bash
+kubectl rollout history deployment/<service-name> -n production
+kubectl rollout undo deployment/<service-name> -n production --to-revision=<number>
+```
+
+## Path 3 — Database Migration Rollbacks
+
+<Warning>
+  Database migration rollbacks are inherently risky. Rolling back a migration can cause data loss, constraint violations, or application errors if the running code version expects the new schema. **Never execute a migration rollback without first coordinating with the service team lead and the on-call engineer.** If in doubt, keep the new schema and roll back only the application code using Path 1 or Path 2.
+</Warning>
+
+If a migration must be reversed, use the appropriate tool for the service:
+
+**Python services using Alembic:**
+
+```bash
+# Downgrade one revision
+alembic downgrade -1
+
+# Downgrade to a specific revision ID
+alembic downgrade <revision_id>
+
+# View current revision
+alembic current
+```
+
+**Node.js services using Prisma:**
+
+```bash
+# Roll back the last applied migration by restoring from backup
+# Prisma does not have a native downgrade command — you must restore from
+# a pre-migration database snapshot or apply a manual reversal migration.
+npx prisma migrate resolve --rolled-back <migration_name>
+```
+
+For Prisma services, the safest approach is always a point-in-time restore of the RDS instance to a snapshot taken before the migration ran. Coordinate with the infrastructure team to initiate a restore.
+
+## Post-Rollback Steps
+
+Once the service is stable, complete the following before ending your incident response shift:
+
+<Steps>
+  <Step title="File an incident">
+    Create an incident in PagerDuty (or escalate an existing one) and link it to the relevant deployment. Set severity based on user impact.
+  </Step>
+  <Step title="Notify stakeholders">
+    Post a status update in `#incidents` and `#on-call`. Include: what happened, which service was affected, when the rollback completed, and the current status. Update the status page if the incident was user-visible.
+  </Step>
+  <Step title="Preserve evidence">
+    Before the bad deployment is cleaned up, capture logs, Datadog screenshots, and any relevant kubectl describe output. Attach these to the incident ticket.
+  </Step>
+  <Step title="Document the cause">
+    Open a draft post-mortem document immediately — even just bullet points. The goal is to capture the timeline while it is fresh. The full post-mortem write-up is due within 48 hours. Use the post-mortem template in Confluence.
+  </Step>
+  <Step title="Fix forward or hold">
+    Decide with your team lead whether to fix the issue and re-deploy, or hold off until the post-mortem is complete. Do not re-deploy the same change that caused the incident without identifying and addressing the root cause.
+  </Step>
+</Steps>

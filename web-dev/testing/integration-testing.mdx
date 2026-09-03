@@ -1,0 +1,304 @@
+---
+title: "Integration Testing: API Endpoints and Service Contracts"
+sidebarTitle: "Integration Testing"
+description: "How to write integration tests for our Node and Python APIs, covering test databases, data seeding, happy paths, error paths, and local execution."
+---
+
+Integration tests verify that different parts of the system work correctly together — your route handler, its middleware, the service layer, and the database all cooperating as a unit. Unlike unit tests, integration tests are allowed (and expected) to hit a real database and exercise actual SQL queries; that is the point. What they must never do is touch a shared environment or production data. Every integration test runs against a dedicated test database that is fully under your control, seeded fresh before each run, and torn down cleanly afterwards.
+
+<Note>
+  Never point integration tests at the production database. Not staging, not a shared dev schema, not a personal override of `DATABASE_URL`. Use the `TEST_DATABASE_URL` environment variable which is set automatically in CI and documented in `.env.example` for local setup.
+</Note>
+
+## Tooling
+
+| Stack | Tool | Docs |
+|---|---|---|
+| Node.js / Express | [Supertest](https://github.com/ladjs/supertest) | Makes HTTP requests against your Express app without starting a real server |
+| FastAPI / Python | [TestClient](https://fastapi.tiangolo.com/tutorial/testing/) | Starlette's `TestClient` wraps your FastAPI app with `requests`-compatible interface |
+| Full browser flows | [Playwright](https://playwright.dev) | Used for e2e integration against the preview deployment; see the e2e guide |
+
+## Test Database Setup
+
+<Steps>
+  <Step title="Provision a local test database">
+    Create a dedicated Postgres database for integration tests. Never reuse your development database — truncation between tests would wipe your local seed data.
+
+    ```bash
+    createdb myapp_test
+    ```
+
+    Then add to your `.env.test` file (or copy from `.env.example`):
+
+    ```bash
+    TEST_DATABASE_URL=postgresql://localhost:5432/myapp_test
+    ```
+  </Step>
+  <Step title="Run migrations before the suite">
+    Migrations must be applied to the test database before any test runs. In Jest / Vitest, do this in your global setup file:
+
+    ```ts
+    // tests/setup/globalSetup.ts
+    import { execSync } from 'child_process'
+
+    export default async function globalSetup() {
+      execSync('npm run db:migrate', {
+        env: { ...process.env, DATABASE_URL: process.env.TEST_DATABASE_URL },
+      })
+    }
+    ```
+
+    For Python, use a pytest fixture with session scope:
+
+    ```python
+    # tests/conftest.py
+    import pytest
+    from alembic.config import Config
+    from alembic import command
+
+    @pytest.fixture(scope="session", autouse=True)
+    def run_migrations():
+        alembic_cfg = Config("alembic.ini")
+        alembic_cfg.set_main_option("sqlalchemy.url", os.environ["TEST_DATABASE_URL"])
+        command.upgrade(alembic_cfg, "head")
+    ```
+  </Step>
+  <Step title="Truncate tables between tests">
+    Each test must start with a clean slate. Truncate all application tables (not migration metadata tables) in a `beforeEach` or equivalent fixture:
+
+    ```ts
+    // tests/setup/truncate.ts
+    import { db } from '@/lib/db'
+
+    export async function truncateAll() {
+      await db.raw(
+        `TRUNCATE TABLE users, orders, products RESTART IDENTITY CASCADE`
+      )
+    }
+    ```
+
+    ```ts
+    // In your test file
+    beforeEach(async () => {
+      await truncateAll()
+    })
+    ```
+  </Step>
+</Steps>
+
+## Seeding Test Data with Factory Functions
+
+Never hardcode IDs or magic values in integration tests. Use factory functions to create realistic, valid records and let the database generate IDs:
+
+```ts
+// tests/factories/userFactory.ts
+import { db } from '@/lib/db'
+import { faker } from '@faker-js/faker'
+
+export async function createUser(overrides: Partial<User> = {}): Promise<User> {
+  const [user] = await db('users').insert({
+    email: faker.internet.email(),
+    name: faker.person.fullName(),
+    role: 'member',
+    createdAt: new Date(),
+    ...overrides,
+  }).returning('*')
+  return user
+}
+```
+
+Use overrides to exercise specific scenarios without repeating boilerplate:
+
+```ts
+const adminUser = await createUser({ role: 'admin' })
+const unverifiedUser = await createUser({ emailVerifiedAt: null })
+```
+
+For Python, use a similar pattern with SQLAlchemy:
+
+```python
+# tests/factories.py
+from faker import Faker
+from app.models import User
+from app.database import db_session
+
+fake = Faker()
+
+def create_user(**overrides):
+    user = User(
+        email=overrides.get("email", fake.email()),
+        name=overrides.get("name", fake.name()),
+        role=overrides.get("role", "member"),
+    )
+    db_session.add(user)
+    db_session.commit()
+    db_session.refresh(user)
+    return user
+```
+
+## Testing Happy Paths and Error Paths
+
+For every API endpoint, write at minimum:
+
+1. **One happy-path test** — correct input, authenticated caller, expected `2xx` response and response body
+2. **One auth/permission test** — unauthenticated or unauthorised caller receives `401` or `403`
+3. **One validation test** — malformed or missing input receives a `422` or `400` with a descriptive error body
+
+## Code Examples
+
+<Tabs>
+  <Tab title="Node.js — Supertest">
+    ```ts
+    // src/api/users/users.integration.test.ts
+    import request from 'supertest'
+    import { app } from '@/app'
+    import { truncateAll } from '@tests/setup/truncate'
+    import { createUser } from '@tests/factories/userFactory'
+    import { signToken } from '@/lib/auth'
+
+    beforeEach(async () => {
+      await truncateAll()
+    })
+
+    describe('GET /api/users/:id', () => {
+      it('should return the user object for an authenticated request', async () => {
+        // Arrange
+        const user = await createUser({ name: 'Alice Example' })
+        const token = signToken({ userId: user.id })
+
+        // Act
+        const res = await request(app)
+          .get(`/api/users/${user.id}`)
+          .set('Authorization', `Bearer ${token}`)
+
+        // Assert
+        expect(res.status).toBe(200)
+        expect(res.body).toMatchObject({
+          id: user.id,
+          name: 'Alice Example',
+        })
+        // Sensitive fields must never be returned
+        expect(res.body).not.toHaveProperty('passwordHash')
+      })
+
+      it('should return 401 when no token is provided', async () => {
+        const user = await createUser()
+        const res = await request(app).get(`/api/users/${user.id}`)
+        expect(res.status).toBe(401)
+      })
+
+      it('should return 404 when the user does not exist', async () => {
+        const token = signToken({ userId: 999 })
+        const res = await request(app)
+          .get('/api/users/99999')
+          .set('Authorization', `Bearer ${token}`)
+        expect(res.status).toBe(404)
+      })
+    })
+
+    describe('POST /api/users', () => {
+      it('should create a new user and return 201', async () => {
+        // Arrange
+        const payload = { email: 'bob@example.com', name: 'Bob Example', role: 'member' }
+
+        // Act
+        const res = await request(app).post('/api/users').send(payload)
+
+        // Assert
+        expect(res.status).toBe(201)
+        expect(res.body).toMatchObject({ email: 'bob@example.com' })
+        expect(res.body.id).toBeDefined()
+      })
+
+      it('should return 422 when email is missing', async () => {
+        const res = await request(app).post('/api/users').send({ name: 'No Email' })
+        expect(res.status).toBe(422)
+        expect(res.body.errors).toContainEqual(
+          expect.objectContaining({ field: 'email' })
+        )
+      })
+    })
+    ```
+  </Tab>
+  <Tab title="Python — FastAPI TestClient">
+    ```python
+    # app/api/test_users.py
+    import pytest
+    from fastapi.testclient import TestClient
+    from app.main import app
+    from app.auth import create_access_token
+    from tests.factories import create_user
+
+    client = TestClient(app)
+
+    class TestGetUser:
+        def test_returns_user_for_authenticated_request(self, db_session):
+            # Arrange
+            user = create_user(name="Alice Example")
+            token = create_access_token({"user_id": user.id})
+            headers = {"Authorization": f"Bearer {token}"}
+
+            # Act
+            response = client.get(f"/api/users/{user.id}", headers=headers)
+
+            # Assert
+            assert response.status_code == 200
+            data = response.json()
+            assert data["id"] == user.id
+            assert data["name"] == "Alice Example"
+            assert "password_hash" not in data
+
+        def test_returns_401_without_token(self, db_session):
+            user = create_user()
+            response = client.get(f"/api/users/{user.id}")
+            assert response.status_code == 401
+
+        def test_returns_404_for_nonexistent_user(self, db_session):
+            token = create_access_token({"user_id": 1})
+            headers = {"Authorization": f"Bearer {token}"}
+            response = client.get("/api/users/99999", headers=headers)
+            assert response.status_code == 404
+
+    class TestCreateUser:
+        def test_creates_user_and_returns_201(self, db_session):
+            # Arrange
+            payload = {"email": "bob@example.com", "name": "Bob Example", "role": "member"}
+
+            # Act
+            response = client.post("/api/users", json=payload)
+
+            # Assert
+            assert response.status_code == 201
+            data = response.json()
+            assert data["email"] == "bob@example.com"
+            assert "id" in data
+
+        def test_returns_422_when_email_is_missing(self, db_session):
+            response = client.post("/api/users", json={"name": "No Email"})
+            assert response.status_code == 422
+            errors = response.json()["detail"]
+            fields = [e["loc"][-1] for e in errors]
+            assert "email" in fields
+    ```
+  </Tab>
+</Tabs>
+
+## Running Integration Tests Locally
+
+```bash
+# Node.js — run the integration suite once
+npm run test:integration
+
+# Node.js — run a single file
+npm run test:integration -- src/api/users/users.integration.test.ts
+
+# Python — run integration tests (marked separately)
+pytest -m integration
+
+# Python — run a single file
+pytest app/api/test_users.py -v
+```
+
+<Tip>
+  If your integration tests are slow, look for N+1 patterns in your factories or teardown. Truncating with `RESTART IDENTITY CASCADE` is almost always faster than deleting rows one by one.
+</Tip>

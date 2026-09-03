@@ -1,0 +1,135 @@
+---
+title: "On-Call Guide: Responsibilities, Tools, and Handoffs"
+sidebarTitle: "On-Call Guide"
+description: "Everything you need to carry a successful on-call shift: schedule expectations, escalation paths, required tooling, and how to hand off cleanly to the next engineer."
+---
+
+Being on call is a shared responsibility that keeps the team's services running for customers around the clock. This guide covers everything you need before, during, and after your shift — from confirming your tooling is ready to writing a thorough handoff that sets the next engineer up for success. Read this page before your first on-call shift and review it any time you need a refresher.
+
+## Schedule and Expectations
+
+On-call rotations run in **one-week blocks**, Monday 09:00 UTC through the following Monday 09:00 UTC. The schedule lives in PagerDuty and is published at least **two weeks in advance**. If you need to swap a shift, coordinate directly with a teammate and update PagerDuty before the shift starts — do not rely on verbal agreements.
+
+When you are on call you are expected to:
+
+- **Acknowledge PagerDuty pages within 5 minutes.** If you do not acknowledge in time, the alert escalates automatically to the team lead.
+- **Triage every alert.** Even if it turns out to be noise, log your findings in the `#on-call` Slack channel so the team builds a shared picture of alert patterns.
+- **Resolve or escalate.** Resolve what you can; escalate anything that exceeds 20 minutes without clear progress (see [Escalation Path](#escalation-path) below).
+- **Stay reachable.** Keep your phone on and PagerDuty notifications enabled for the full week. If you need to step away for more than 30 minutes (e.g. a flight), arrange temporary cover and note it in `#on-call`.
+
+## Shift Start Checklist
+
+Run through this checklist at the beginning of every shift. Catching a broken tool or stale credential at 09:00 is far better than discovering it at 02:00.
+
+<Steps>
+  <Step title="Confirm PagerDuty schedule">
+    Open PagerDuty and verify that you are the active on-call for the current rotation. Check for any overrides or escalation policy changes. Enable push notifications on the PagerDuty mobile app if they are not already on.
+  </Step>
+
+  <Step title="Check the #on-call handoff message">
+    Read the outgoing engineer's handoff summary in `#on-call`. Note any open incidents, degraded services, or alerts that are known noise. Ask the outgoing engineer to clarify anything that is not clear before they go off shift.
+  </Step>
+
+  <Step title="Verify VPN access">
+    Connect to the VPN and confirm you can reach internal services. If your VPN certificate has expired, contact the `#ops-help` Slack channel to rotate it before your shift begins.
+
+    ```bash
+    # Quick connectivity check once VPN is up
+    curl -sf https://internal.example.com/healthz && echo "VPN OK"
+    ```
+  </Step>
+
+  <Step title="Confirm AWS console SSO">
+    Log in to the AWS console via SSO and verify your session is valid. SSO sessions expire every 8 hours — you may need to re-authenticate during the shift.
+
+    ```bash
+    # Refresh your SSO session from the CLI
+    aws sso login --profile production
+    aws sts get-caller-identity --profile production
+    ```
+  </Step>
+
+  <Step title="Verify kubectl access">
+    Confirm that your kubeconfig is current and that you can reach the production cluster.
+
+    ```bash
+    kubectl get nodes --context production
+    ```
+
+    If the command fails, re-export your kubeconfig:
+
+    ```bash
+    aws eks update-kubeconfig --name prod-cluster --region eu-west-1 --profile production
+    ```
+  </Step>
+
+  <Step title="Open Datadog dashboards">
+    Open the [Ops Overview dashboard](https://app.datadoghq.com/dashboard/ops-overview) and pin it in your browser. Familiarise yourself with baseline metrics so you can spot anomalies quickly during the shift.
+  </Step>
+
+  <Step title="Post a shift-start message">
+    Post a brief message in `#on-call` to signal that you are active:
+
+    ```
+    👋 On call — @yourname taking over from @previousengineer.
+    Reviewed handoff. No open incidents. Watching the elevated Redis memory alert.
+    ```
+  </Step>
+</Steps>
+
+<Tip>
+  Keep your on-call laptop charged and your VPN profile configured at all times, even when you are not on shift. Swaps happen at short notice, and the fastest way to help a colleague in a crunch is to be ready to take over with no setup required.
+</Tip>
+
+## Escalation Path
+
+Follow these steps in order when an alert comes in. Move to the next step if you are not making progress within the time window.
+
+1. **Acknowledge the page** in PagerDuty immediately (within 5 minutes).
+2. **Diagnose** — Check Datadog, review recent deployments in ArgoCD, inspect logs with `kubectl logs`. Post your working hypothesis in `#on-call`.
+3. **Escalate at 20 minutes** — If you have not resolved or clearly understood the issue within 20 minutes, ping the team lead directly in Slack and call their mobile if there is no response within 2 minutes. Do not wait longer out of reluctance to wake someone up — that is exactly what escalation contacts are for.
+4. **Declare an incident** — For anything P1 or P2, run `/incident declare` in `#incidents` as described in the [Incident Response runbook](/ops/runbooks/incident-response). Do not attempt to quietly fix a P1 without declaring.
+
+<Warning>
+  Never hesitate to wake the team lead for a P1. A delayed escalation on a production-down incident costs far more — in customer trust and engineering time — than a brief interruption to someone's night. If in doubt, escalate.
+</Warning>
+
+## Handoff Process
+
+At the end of your shift, post an end-of-shift summary in `#on-call` **before** your rotation ends. The incoming engineer reads this summary before they start their checklist. A good handoff takes 10 minutes to write and saves hours of confusion.
+
+Use this template:
+
+```
+🔁 End-of-shift handoff — @yourname → @nextperson
+Period: 2024-06-10 09:00 UTC – 2024-06-17 09:00 UTC
+
+**Open incidents:** None
+
+**Known issues:**
+- Redis memory on prod-cache-02 is at 78% — Datadog alert is acknowledged, ticket: OPS-412
+- Elevated 4xx rate on /api/v2/search between 02:00–03:00 UTC nightly — appears to be a crawler, not actionable
+
+**Alerts that are known noise:**
+- "ECS task stopped" for the nightly batch job — fires every night at 03:30 UTC, expected
+
+**Anything to watch:**
+- New deployment of the payments service goes out Tuesday — keep an eye on error rates post-deploy
+```
+
+## Key Tools
+
+<CardGroup cols={2}>
+  <Card title="PagerDuty" icon="bell" href="https://yourorg.pagerduty.com">
+    Manage your on-call schedule, acknowledge alerts, and view escalation policies. Install the mobile app and enable push notifications before your first shift.
+  </Card>
+  <Card title="Datadog" icon="chart-line" href="https://app.datadoghq.com">
+    Primary observability platform. Use it for dashboards, log search, APM traces, and alert history. Bookmark the Ops Overview dashboard.
+  </Card>
+  <Card title="ArgoCD" icon="code-branch" href="https://argocd.internal.example.com">
+    GitOps deployment dashboard. Use it to check deployment status, view sync errors, and roll back to a previous revision during an incident.
+  </Card>
+  <Card title="AWS Console" icon="cloud" href="https://console.aws.amazon.com">
+    Access AWS services via SSO. Commonly used during on-call for ECS, RDS, ElastiCache, ACM, and CloudWatch Logs. Re-authenticate every 8 hours.
+  </Card>
+</CardGroup>

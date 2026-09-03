@@ -1,0 +1,108 @@
+---
+title: "Code Review Process: What to Look For and Expectations"
+sidebarTitle: "Code Review"
+description: "Our code review process: reviewer and author responsibilities, the 24-hour SLA, commenting etiquette, approval criteria, and when to pair-program instead."
+---
+
+Code review is one of the highest-leverage activities on the team. A good review catches bugs before they reach production, spreads knowledge about parts of the codebase reviewers wouldn't otherwise touch, and nudges the overall quality bar upward with every PR. To make that work without slowing each other down, we have clear expectations for both authors and reviewers — covering everything from how large a PR should be, to how long you have before a review is overdue, to the exact format for leaving a comment.
+
+## Author Responsibilities
+
+Before you request a review, make the reviewer's job as easy as possible:
+
+- **Keep PRs small.** Aim for under 400 lines of diff. If a feature is bigger, break it into a stack of smaller PRs. Reviewers can meaningfully assess a 300-line diff; they cannot meaningfully assess a 3,000-line diff.
+- **Write a descriptive PR description.** Explain *why* the change exists, not just what it does. Link to the relevant ticket. Include screenshots or recordings for visual changes.
+- **Self-review first.** Read your own diff in the GitHub UI before assigning reviewers. You will catch at least one thing you forgot to clean up.
+- **Respond to all comments.** Either resolve them with a code change, or reply with a clear explanation of why you disagree. Never silently dismiss feedback.
+
+<Tip>
+  Use a PR template to prompt yourself on every submission. Store it at `.github/pull_request_template.md` and it will pre-fill the PR body automatically. A minimal template should ask for: a summary of the change, the linked ticket, testing notes, and any deployment considerations.
+</Tip>
+
+## Reviewer Responsibilities
+
+When you are assigned as a reviewer, check for the following:
+
+- **Correctness** — Does the code do what the PR description says it does? Are there edge cases the author missed?
+- **Test coverage** — Are new functions and branches covered? Would you be confident deploying this change at midnight without a second look?
+- **Readability** — Will a teammate be able to understand this code in six months without asking the author? Are variable names, function names, and comments clear?
+- **Security basics** — Look for common issues: unsanitised user input, secrets in code, overly permissive CORS or database queries, missing authentication checks on new routes.
+- **Performance** — Watch for obvious N+1 queries, unnecessary re-renders, or large synchronous operations on the request thread.
+
+You are not expected to be an expert in every area the PR touches. If you notice something looks suspicious but you are not sure, leave a question — that is still useful signal.
+
+## Review Turnaround SLA
+
+Respond to all review requests **within 24 hours on weekdays**. "Respond" means leaving at least one substantive comment, an approval, or a message explaining that you need more time. Leaving a PR sitting in silence for more than a day blocks your teammates.
+
+If you are on leave, out sick, or in a heavy focus sprint, update your GitHub status so authors know to assign someone else.
+
+## Approval, Change Requests, and Blocking
+
+| Action | When to use it |
+|---|---|
+| **Approve** | You are confident the change is correct, tested, and safe to merge. Minor style nits do not prevent approval. |
+| **Request changes** | You have found a substantive issue — a bug, a missing test for a critical path, a security concern, or a significant readability problem — that must be addressed before merge. |
+| **Block (escalate)** | The change introduces a risk serious enough that it needs a synchronous conversation: a breaking API contract change, a migration with no rollback path, or a security vulnerability. Ping the author and the team lead directly. |
+
+A single approval from any engineer on the team is sufficient to merge, except for changes to infrastructure-as-code, CI pipelines, or auth/security modules, which require a second approval from a senior engineer.
+
+## The Review Checklist
+
+<Steps>
+  <Step title="Read the PR description and linked ticket">
+    Understand the intent before you look at any code. If the description is missing or vague, ask the author to fill it in before you spend time reviewing.
+  </Step>
+  <Step title="Check the test coverage">
+    Look at the test files first. Is every new function covered? Are both happy paths and error paths represented? A PR without tests for new logic is not ready for review.
+  </Step>
+  <Step title="Review the logic">
+    Read the implementation. Work through the logic manually for at least one realistic input. Look for off-by-one errors, missing null checks, and branching logic that is not tested.
+  </Step>
+  <Step title="Check for security issues">
+    Scan for: user-controlled input flowing into SQL queries, file paths, or shell commands without sanitisation; new endpoints lacking authentication or authorisation; secrets or credentials committed to the repo.
+  </Step>
+  <Step title="Assess readability">
+    Would you understand this code without the PR description? If function or variable names are unclear, or a complex block needs a comment, say so.
+  </Step>
+  <Step title="Leave your comments and verdict">
+    Post your comments, then submit your review with Approve, Request Changes, or a comment. Do not leave comments without submitting — the author will not be notified.
+  </Step>
+</Steps>
+
+## Commenting Etiquette
+
+Reviews should feel like constructive collaboration, not criticism. Apply these rules to every comment you leave:
+
+- **Be kind.** Assume good intent. Write comments as if the author will read them after a long, stressful day — because sometimes they will.
+- **Be specific.** "This is confusing" is not actionable. "I found this hard to follow — could you extract lines 40–55 into a named function?" is.
+- **Be actionable.** Every comment should make clear what you want to happen. If you are raising a question rather than requesting a change, phrase it as a question.
+- **Use the `nit:` prefix** for minor, optional style feedback that would not block your approval: `nit: this could be a const instead of let`. The author knows they can take it or leave it.
+- **Distinguish blocking from non-blocking.** If a comment is non-blocking, say so explicitly: `nit:`, `optional:`, or `just a thought:`. If it is blocking, state that clearly too: `blocking: this endpoint has no auth check`.
+
+## When to Pair-Program Instead
+
+Async review is not always the right tool. Switch to a synchronous pairing session when:
+
+- The PR is a first attempt at a pattern that is new to the author and the approach itself needs discussion
+- You have left more than three rounds of back-and-forth comments without resolution
+- The change involves unfamiliar infrastructure (a new third-party integration, a significant database schema change) and a walkthrough would be faster than written notes
+- You need to coach a more junior team member rather than just approve or reject their work
+
+A 30-minute pairing session often resolves what three days of async comment threads cannot. After the session, capture any decisions in a PR comment so there is a written record.
+
+<Accordion title="Common review anti-patterns to avoid">
+  **Rubber-stamping.** Approving without reading because you trust the author or you are in a hurry. This erodes the value of the review entirely.
+
+  **Scope creep.** Requesting refactors or improvements that are unrelated to the PR's stated purpose. If you notice something worth improving nearby, open a separate ticket.
+
+  **Nitpicking style on non-style PRs.** If the team has a linter, let the linter enforce style automatically. Do not spend your review budget on quote styles, comma placement, or line length if those are already covered by ESLint or Prettier.
+
+  **Vague blocking comments.** "I'm not happy with this approach" without explaining why, or without suggesting an alternative, puts the author in an impossible position. If you want changes, describe exactly what you want to see.
+
+  **Ghosting.** Being assigned a review and not responding. This blocks the author, stacks up their PRs, and creates pressure to merge without review. If you cannot review within the SLA, say so immediately.
+
+  **Approving under pressure.** Approving a PR because the author is urgent or frustrated, not because the code is ready. If you have a legitimate concern, hold your ground and explain your reasoning calmly.
+
+  **Leaving comments after approval.** Submitting your approval and then continuing to add comments afterwards. Submit all of your feedback at once, then click your verdict.
+</Accordion>

@@ -1,0 +1,85 @@
+---
+title: "Testing Overview: Our Quality and Coverage Standards"
+sidebarTitle: "Overview"
+description: "Learn our testing philosophy, coverage targets, file conventions, and how CI gating enforces quality before every merge into the main branch."
+---
+
+Our testing strategy is built around confidence — every change you ship should leave the codebase more reliable than you found it. We follow the **testing pyramid**: write many fast, focused unit tests at the base, fewer integration tests in the middle, and a small number of end-to-end tests at the top. This balance keeps the suite quick enough to run on every commit while still catching the regressions that matter most. All tests are colocated with their source files using the `*.test.ts` (or `*.test.tsx`) naming convention, and they must pass in CI before any pull request can be merged.
+
+## Coverage Targets
+
+We enforce a minimum of **80% line coverage** across the codebase. Critical paths — authentication flows, payment processing, data-mutation API endpoints, and shared utility libraries — require **100% coverage**. Coverage is measured on every CI run and reported back to the pull request. If you drop below the threshold, the build fails.
+
+<Note>
+  Coverage percentage alone does not guarantee quality. A test that asserts nothing can still hit 100% coverage. Always write meaningful assertions, not just execution paths.
+</Note>
+
+## File Colocation Convention
+
+Place every test file next to its source file in the same directory:
+
+```
+src/
+  utils/
+    formatDate.ts
+    formatDate.test.ts
+  components/
+    Button.tsx
+    Button.test.tsx
+  api/
+    users.ts
+    users.test.ts
+```
+
+This keeps tests discoverable and makes it obvious when a file lacks coverage during review.
+
+## Naming Convention
+
+Use `describe` to group tests by the subject under test (class, function, or component name) and `it` to describe each behaviour with a plain-English sentence starting with **"should"**:
+
+```ts
+describe('formatDate', () => {
+  it('should format a UTC timestamp as DD/MM/YYYY', () => { ... })
+  it('should return an empty string when given null', () => { ... })
+  it('should throw a RangeError for invalid date strings', () => { ... })
+})
+```
+
+This convention makes failing test output self-documenting: `formatDate > should return an empty string when given null`.
+
+## Required Test Types per Layer
+
+| Layer | What you must test |
+|---|---|
+| **Utilities & pure functions** | Every exported function needs at least one unit test per logical branch |
+| **React components** | Render smoke test + interaction tests for user-facing behaviour |
+| **API endpoints** | At least one happy-path and one error-path integration test per route |
+| **Key user flows** | Critical journeys (sign-up, checkout, login) covered by e2e tests |
+
+## CI Gating
+
+Tests run automatically on every push and pull request via GitHub Actions. **No PR may be merged unless all of the following pass:**
+
+- Unit and integration test suites exit with code `0`
+- Coverage thresholds are met
+- End-to-end smoke tests pass against the preview deployment
+
+If a flaky test causes an intermittent failure, do not re-run until it passes — file an issue and add it to the flaky-test backlog instead.
+
+## The Three Test Types
+
+<CardGroup cols={3}>
+  <Card title="Unit Testing" icon="flask-vial" href="/web-dev/testing/unit-testing">
+    Fast, isolated tests for individual functions and components. Written with Vitest, Jest, or pytest. Run on every save in watch mode.
+  </Card>
+  <Card title="Integration Testing" icon="arrows-to-circle" href="/web-dev/testing/integration-testing">
+    Tests that verify API endpoints and service contracts against a real (test) database. Written with Supertest or FastAPI TestClient.
+  </Card>
+  <Card title="Code Review" icon="magnifying-glass-chart" href="/web-dev/testing/code-review">
+    The human layer of quality assurance. Our process, SLAs, commenting etiquette, and review checklist live here.
+  </Card>
+</CardGroup>
+
+<Tip>
+  **Write the test before you fix the bug.** First, reproduce the failure with a new test that asserts the correct behaviour — watch it go red. Then make your fix and watch it go green. This guarantees the bug cannot regress silently and gives you a concrete definition of "done".
+</Tip>

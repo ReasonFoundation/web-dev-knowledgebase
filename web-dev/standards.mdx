@@ -1,0 +1,201 @@
+---
+title: "Development Standards and Coding Conventions"
+sidebarTitle: "Standards"
+description: "The engineering quality bar for all web projects: naming conventions, documentation expectations, linting tooling, and what it means to ship done work."
+---
+
+Every line of code you write is read far more often than it is written. These standards exist to keep the codebase predictable, reviewable, and maintainable by the whole team — not just the original author. Treat them as defaults, not suggestions. When in doubt, optimise for the next engineer who reads your code, not for the cleverness of the solution.
+
+## General Coding Principles
+
+Good code at this team means code that is easy to understand at a glance. Keep the following principles in mind on every task.
+
+- **Clarity over cleverness.** Prefer a verbose, readable solution over a terse one that requires a mental model to decode. If you need a comment to explain *what* the code is doing (not *why*), consider rewriting it instead.
+- **DRY (Don't Repeat Yourself).** Extract repeated logic into a shared utility or helper. Two occurrences of the same block is a warning sign; three is a refactor ticket.
+- **Single Responsibility.** Functions, classes, and modules should do one thing. If you find yourself writing "and" in a function name, split it.
+- **Open/Closed.** Design modules to be extended without being modified. Favour composition and dependency injection over hardcoded branches.
+- **Fail loudly.** Raise meaningful errors early. Swallowing exceptions or returning `null` silently makes bugs harder to trace. Log the context, not just the message.
+
+## Naming Conventions
+
+Consistent naming removes cognitive load and makes search and refactoring reliable. The rules below apply across the entire repo surface. Use the accordions for language-specific details.
+
+<Accordion title="JavaScript and TypeScript">
+| Construct | Convention | Example |
+|---|---|---|
+| Files and directories | `kebab-case` | `user-profile.ts`, `api-client/` |
+| Variables and parameters | `camelCase` | `userId`, `fetchOptions` |
+| Functions | `camelCase`, verb-first | `getUserById()`, `formatDate()` |
+| Classes and interfaces | `PascalCase` | `UserRepository`, `ApiResponse` |
+| Constants (module-level) | `SCREAMING_SNAKE_CASE` | `MAX_RETRY_COUNT`, `BASE_URL` |
+| React components | `PascalCase` file and export | `UserCard.tsx`, `export default UserCard` |
+| Enums | `PascalCase` name, `PascalCase` members | `enum HttpStatus { Ok, NotFound }` |
+| Boolean variables | `is` / `has` / `can` prefix | `isLoading`, `hasPermission` |
+
+Avoid single-letter variables outside of short loop counters (`i`, `j`) or well-understood math contexts. Prefer `index` and `offset` even in loops when the meaning is non-obvious.
+</Accordion>
+
+<Accordion title="Python">
+| Construct | Convention | Example |
+|---|---|---|
+| Files and directories | `snake_case` | `user_profile.py`, `api_client/` |
+| Variables and parameters | `snake_case` | `user_id`, `fetch_options` |
+| Functions and methods | `snake_case`, verb-first | `get_user_by_id()`, `format_date()` |
+| Classes | `PascalCase` | `UserRepository`, `ApiResponse` |
+| Constants (module-level) | `SCREAMING_SNAKE_CASE` | `MAX_RETRY_COUNT`, `BASE_URL` |
+| Private members | leading underscore | `_internal_state`, `_validate()` |
+| Type aliases | `PascalCase` | `UserId = int`, `JsonDict = dict[str, Any]` |
+
+Follow [PEP 8](https://peps.python.org/pep-0008/) as the baseline. All naming decisions not covered here default to PEP 8.
+</Accordion>
+
+<Accordion title="CSS and Tailwind class ordering">
+CSS module files follow `kebab-case` matching their component file: `UserCard.tsx` → `user-card.module.css`. Custom CSS property names use `--kebab-case` with a component prefix: `--card-bg-color`.
+
+When writing Tailwind utility classes directly in JSX, keep them in the following order to stay consistent with `prettier-plugin-tailwindcss` (which is enforced by the formatter):
+
+1. Layout (`display`, `position`, `flex`, `grid`)
+2. Sizing (`w-`, `h-`, `min-`, `max-`)
+3. Spacing (`p-`, `m-`)
+4. Typography (`text-`, `font-`, `leading-`)
+5. Colour (`bg-`, `text-`, `border-`)
+6. Effects (`shadow-`, `opacity-`, `transition-`)
+7. Responsive and state variants last (`md:`, `hover:`, `focus:`)
+</Accordion>
+
+## Commenting and Documentation
+
+Comments should explain *why* a decision was made, not narrate what the code does. The code itself communicates the *what*; your comments communicate intent, trade-offs, and context that can't be inferred from syntax alone.
+
+**Public API surface — JSDoc / docstrings are required.** Any function, class, or method that is exported from a module or forms part of a service boundary must have a doc comment. This is enforced in PR review.
+
+<Tabs>
+  <Tab title="TypeScript (JSDoc)">
+    ```typescript
+    /**
+     * Retrieves a paginated list of users belonging to the given organisation.
+     *
+     * @param orgId - The UUID of the organisation to query.
+     * @param options - Pagination and filtering options.
+     * @param options.page - 1-based page number. Defaults to 1.
+     * @param options.limit - Maximum records per page. Capped at 100.
+     * @returns A paginated result containing the user records and total count.
+     * @throws {NotFoundError} If the organisation does not exist.
+     */
+    export async function listOrgUsers(
+      orgId: string,
+      options: PaginationOptions = {}
+    ): Promise<PaginatedResult<User>> {
+      // implementation
+    }
+    ```
+  </Tab>
+  <Tab title="Python (docstring)">
+    ```python
+    def list_org_users(
+        org_id: str,
+        page: int = 1,
+        limit: int = 20,
+    ) -> PaginatedResult[User]:
+        """Return a paginated list of users belonging to the given organisation.
+
+        Args:
+            org_id: The UUID of the organisation to query.
+            page: 1-based page number. Defaults to 1.
+            limit: Maximum records per page. Capped at 100.
+
+        Returns:
+            A PaginatedResult containing the user records and total count.
+
+        Raises:
+            NotFoundError: If the organisation does not exist.
+        """
+        # implementation
+    ```
+  </Tab>
+</Tabs>
+
+For inline comments, use a full sentence with a capital letter and a period. Avoid commented-out code in PRs — delete it. If you need to preserve something for reference, use a `// TODO(your-name):` tag and link to a ticket.
+
+## Linting and Formatting Tooling
+
+All formatting decisions are delegated to automated tools. You should never debate whitespace, quote style, or import ordering in a PR review — the formatter handles it. Configure your editor to format on save.
+
+<Tabs>
+  <Tab title="JavaScript / TypeScript">
+    The project uses **ESLint** for static analysis and **Prettier** for formatting. Both run as part of the pre-commit hook and the CI pipeline.
+
+    ```bash
+    # Check for lint errors
+    npx eslint . --ext .ts,.tsx
+
+    # Auto-fix lint errors where possible
+    npx eslint . --ext .ts,.tsx --fix
+
+    # Format all files
+    npx prettier --write .
+
+    # Check formatting without writing (used in CI)
+    npx prettier --check .
+    ```
+
+    Key ESLint rules in `.eslintrc.json` that are set to `error` (not `warn`):
+    - `no-unused-vars` — delete unused imports and variables before committing
+    - `no-explicit-any` — type your code; use `unknown` and narrow if needed
+    - `eqeqeq` — always use `===` / `!==`
+    - `no-console` — use the shared logger utility instead
+  </Tab>
+  <Tab title="Python">
+    The project uses **Ruff** for linting and import sorting, and **Black** for formatting.
+
+    ```bash
+    # Check for lint errors
+    ruff check .
+
+    # Auto-fix lint errors where possible
+    ruff check . --fix
+
+    # Format all files
+    black .
+
+    # Check formatting without writing (used in CI)
+    black --check .
+    ```
+
+    Both tools read their configuration from `pyproject.toml`. Black's line length is set to **88** characters. Do not override this per-file.
+  </Tab>
+</Tabs>
+
+<Note>
+Pre-commit hooks enforce linting and formatting automatically on every commit. Run `pre-commit install` once after cloning the repo to activate them. If a hook blocks your commit, fix the reported issues rather than bypassing the hook with `--no-verify`. Bypassing hooks is logged and flagged in code review.
+</Note>
+
+## Definition of Done
+
+A task is not complete when the feature works locally. It is done when all of the following are true:
+
+<Steps>
+  <Step title="Tests are written and passing">
+    Every new function or code path has at least one unit test. Bug fixes include a regression test that reproduces the original failure. Run the full test suite locally before opening a PR.
+
+    ```bash
+    # Node / TypeScript
+    npm test
+
+    # Python
+    pytest
+    ```
+  </Step>
+  <Step title="Lint and formatting pass cleanly">
+    Running the linter and formatter against your changes produces zero errors and zero warnings. CI will block the PR merge if either check fails.
+  </Step>
+  <Step title="Documentation is updated">
+    If you added or changed a public function, updated an API contract, or modified a configuration value, the relevant JSDoc / docstring and any related markdown docs are updated in the same PR.
+  </Step>
+  <Step title="PR is reviewed and approved">
+    At least one other team member has reviewed the diff, left any blocking comments resolved, and approved the PR. Self-merging without review is only permitted for emergency hotfixes, and must be followed by a retrospective comment on the PR.
+  </Step>
+  <Step title="No regressions in CI">
+    All GitHub Actions checks — tests, lint, type-check, and build — are green. Do not merge a PR with a failing pipeline, even if you believe the failure is unrelated to your change.
+  </Step>
+</Steps>

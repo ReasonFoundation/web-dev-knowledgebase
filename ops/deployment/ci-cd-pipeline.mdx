@@ -1,0 +1,151 @@
+---
+title: "CI/CD Pipeline: How Code Moves from PR to Production"
+sidebarTitle: "CI/CD Pipeline"
+description: "A complete walkthrough of our CI/CD pipeline — tooling, pipeline stages, trigger rules, artifact storage, and how to monitor an active deployment."
+---
+
+Every code change you make travels through a multi-stage automated pipeline before it reaches users. Understanding this pipeline helps you ship faster, debug failures confidently, and know exactly where your change is at any point in the process. This page covers every stage from the moment you open a pull request to a running pod in production.
+
+## Tooling
+
+We use two tools in combination to deliver a full CI/CD workflow:
+
+- **GitHub Actions** handles CI — linting, testing, building, and pushing images.
+- **ArgoCD** handles CD — it watches the `k8s-manifests` repository and syncs any diff to the target cluster using a GitOps model.
+
+Docker images are stored in **AWS ECR** and tagged with the Git commit SHA (e.g., `api-gateway:a3f8c12`). This makes every artifact fully traceable back to a specific commit.
+
+## Pipeline Stages
+
+<Steps>
+  <Step title="Lint">
+    On every push and pull request, GitHub Actions runs the linter for the affected service. Failures here block the PR from merging. Fix linting errors locally before pushing to keep the feedback loop short.
+  </Step>
+  <Step title="Test">
+    Unit and integration tests run in parallel after lint passes. PRs that fail tests cannot be merged. The test suite must stay green on `main` at all times — if a merge breaks tests, revert immediately.
+  </Step>
+  <Step title="Build">
+    On merge to `main`, Actions builds a Docker image for every changed service. The image is tagged with the full commit SHA and a `latest-staging` floating tag.
+  </Step>
+  <Step title="Push Image to ECR">
+    The built image is pushed to the service's ECR repository. Example tag format: `123456789.dkr.ecr.us-east-1.amazonaws.com/api-gateway:a3f8c12`.
+  </Step>
+  <Step title="Deploy to Dev">
+    Actions commits the new image tag to `k8s-manifests/dev/` and pushes. ArgoCD detects the diff and syncs the dev cluster automatically. Dev is always on the latest `main`.
+  </Step>
+  <Step title="Deploy to Staging">
+    After dev stabilises (a 5-minute automated smoke test passes), Actions opens an automated PR against `k8s-manifests/staging/` and auto-merges it. ArgoCD syncs the staging cluster. Staging mirrors the production configuration.
+  </Step>
+</Steps>
+
+## Trigger Rules
+
+| Event | Stages triggered |
+|---|---|
+| Open or update a PR | Lint, Test |
+| Merge to `main` | Lint, Test, Build, Push, Deploy Dev, Deploy Staging |
+| Tag `v*` on `main` | Full pipeline + release image push (see [Release Process](/ops/deployment/release-process)) |
+
+## GitHub Actions Workflow
+
+Below is the canonical workflow file located at `.github/workflows/ci-cd.yml`. Copy it as a starting point for a new service and update the `SERVICE_NAME` and `ECR_REPO` environment variables.
+
+```yaml
+name: CI/CD Pipeline
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+env:
+  SERVICE_NAME: api-gateway
+  ECR_REPO: 123456789.dkr.ecr.us-east-1.amazonaws.com/api-gateway
+  AWS_REGION: us-east-1
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm test -- --ci
+
+  build-and-push:
+    name: Build & Push
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::123456789:role/github-actions-ecr
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Log in to ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push
+        run: |
+          IMAGE_TAG=${{ github.sha }}
+          docker build -t $ECR_REPO:$IMAGE_TAG -t $ECR_REPO:latest-staging .
+          docker push $ECR_REPO:$IMAGE_TAG
+          docker push $ECR_REPO:latest-staging
+
+  deploy-dev:
+    name: Deploy to Dev
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: your-org/k8s-manifests
+          token: ${{ secrets.MANIFESTS_PAT }}
+          path: k8s-manifests
+
+      - name: Update dev image tag
+        run: |
+          cd k8s-manifests/dev/${{ env.SERVICE_NAME }}
+          sed -i "s|image: .*|image: $ECR_REPO:${{ github.sha }}|" deployment.yaml
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git commit -am "chore(dev): bump $SERVICE_NAME to ${{ github.sha }}"
+          git push
+```
+
+## Monitoring a Deployment
+
+Once your change has merged, use these resources to follow its progress:
+
+- **GitHub Actions logs** — visible in the Actions tab of the service repository. Each job (lint, test, build, push, deploy) has its own collapsible log.
+- **ArgoCD dashboard** — navigate to the [ArgoCD UI](https://argocd.internal.example.com) to see sync status for `dev` and `staging` apps. A green tick means ArgoCD has successfully applied the manifests. Yellow means a sync is in progress. Red means sync failed — click the app for details.
+- **Datadog** — once pods are running, the [service dashboard](https://app.datadoghq.com) shows error rate, latency, and throughput within seconds of deployment.
+
+<Note>
+  **Emergency hotfix deploys** bypass the standard pipeline. If a critical production bug requires an immediate fix, follow the [Rollback Procedures](/ops/deployment/rollback-procedures) page to revert first, then coordinate with the on-call lead before opening a hotfix PR that targets `main` with a fast-track review. Hotfixes still require passing tests — never merge a failing test to fix an incident.
+</Note>

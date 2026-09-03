@@ -1,0 +1,231 @@
+---
+title: "Unit Testing with Vitest and Jest: Patterns and Examples"
+sidebarTitle: "Unit Testing"
+description: "A practical guide to writing unit tests across our frontend and backend stacks, covering tooling, structure, mocking strategies, and component testing."
+---
+
+Unit tests are the foundation of our quality strategy. They run in milliseconds, give you instant feedback during development, and pinpoint exactly which function broke when something goes wrong. Each unit test targets a single function, class, or component in complete isolation — no network, no database, no filesystem. If your test needs a real external dependency to pass, it is an integration test, not a unit test. Follow the patterns on this page and you will have a consistent, maintainable suite across every layer of the stack.
+
+## Tooling
+
+| Context | Framework | Runner command |
+|---|---|---|
+| Frontend (Vite / React) | [Vitest](https://vitest.dev) | `npm run test` |
+| Node.js backend | [Jest](https://jestjs.io) | `npm run test` |
+| Python services | [pytest](https://pytest.org) | `pytest` |
+
+All three frameworks share the same core concepts — the syntax just differs slightly. Vitest is almost a drop-in replacement for Jest, so if you know one you know the other.
+
+## Test Structure: Arrange–Act–Assert
+
+Every test follows the **Arrange–Act–Assert (AAA)** pattern. Keep a blank line between each phase so the structure is scannable at a glance:
+
+```ts
+it('should return the discounted price when a coupon is applied', () => {
+  // Arrange
+  const basePrice = 100
+  const coupon = { code: 'SAVE10', discountPercent: 10 }
+
+  // Act
+  const result = applyDiscount(basePrice, coupon)
+
+  // Assert
+  expect(result).toBe(90)
+})
+```
+
+Never mix multiple unrelated assertions into a single test. If you find yourself writing "and" in the test description, split it into two tests.
+
+## Mocking
+
+Use `vi.mock` (Vitest) or `jest.mock` (Jest) to replace modules that cross a boundary — network calls, database clients, third-party SDKs. Mock **at the module boundary**, not deep inside the implementation.
+
+```ts
+// Vitest example — mock the entire module
+vi.mock('@/lib/emailClient', () => ({
+  sendEmail: vi.fn().mockResolvedValue({ messageId: 'test-123' }),
+}))
+```
+
+**Avoid over-mocking.** If you mock so many things that your test no longer exercises real logic, you are testing your mocks, not your code. As a rule of thumb: mock I/O, but don't mock pure computation.
+
+<Warning>
+  Never mock the module you are actually testing. If `formatDate.test.ts` mocks `formatDate`, you are testing nothing.
+</Warning>
+
+## Running Tests Locally
+
+```bash
+# Run the full unit test suite once
+npm run test
+
+# Run in watch mode — re-runs affected tests on file save
+npm run test:watch
+
+# Run with coverage report
+npm run test:coverage
+
+# Python
+pytest                    # all tests
+pytest -k "test_discount" # filter by name
+pytest --cov=app          # with coverage
+```
+
+## Examples
+
+<Tabs>
+  <Tab title="JavaScript / TypeScript">
+    ### Vitest — Pure Utility Function
+
+    This example tests `formatCurrency`, a pure function with no side effects. No mocking needed.
+
+    ```ts
+    // src/utils/formatCurrency.test.ts
+    import { describe, it, expect } from 'vitest'
+    import { formatCurrency } from './formatCurrency'
+
+    describe('formatCurrency', () => {
+      it('should format a number as GBP by default', () => {
+        // Arrange
+        const amount = 1234.5
+
+        // Act
+        const result = formatCurrency(amount)
+
+        // Assert
+        expect(result).toBe('£1,234.50')
+      })
+
+      it('should format a number in the specified currency', () => {
+        expect(formatCurrency(99.9, 'USD')).toBe('$99.90')
+      })
+
+      it('should return "£0.00" when given zero', () => {
+        expect(formatCurrency(0)).toBe('£0.00')
+      })
+
+      it('should throw a TypeError when given a non-finite number', () => {
+        expect(() => formatCurrency(NaN)).toThrow(TypeError)
+      })
+    })
+    ```
+
+    ### React Testing Library — Component
+
+    Test user-visible behaviour, not implementation details. Query by accessible roles and labels, not by class names or test IDs.
+
+    ```tsx
+    // src/components/SubmitButton.test.tsx
+    import { describe, it, expect, vi } from 'vitest'
+    import { render, screen, fireEvent } from '@testing-library/react'
+    import { SubmitButton } from './SubmitButton'
+
+    describe('SubmitButton', () => {
+      it('should render with the provided label', () => {
+        render(<SubmitButton label="Save changes" onSubmit={vi.fn()} />)
+        expect(screen.getByRole('button', { name: 'Save changes' })).toBeInTheDocument()
+      })
+
+      it('should call onSubmit when clicked', () => {
+        // Arrange
+        const handleSubmit = vi.fn()
+        render(<SubmitButton label="Save changes" onSubmit={handleSubmit} />)
+
+        // Act
+        fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+
+        // Assert
+        expect(handleSubmit).toHaveBeenCalledOnce()
+      })
+
+      it('should be disabled and show a spinner while loading', () => {
+        render(<SubmitButton label="Save changes" onSubmit={vi.fn()} loading />)
+        const button = screen.getByRole('button', { name: 'Save changes' })
+        expect(button).toBeDisabled()
+        expect(screen.getByRole('progressbar')).toBeInTheDocument()
+      })
+    })
+    ```
+  </Tab>
+  <Tab title="Python">
+    ### pytest — Pure Function
+
+    Use plain `assert` statements. Group related tests in a class prefixed with `Test`, and use `pytest.mark.parametrize` for table-driven tests.
+
+    ```python
+    # app/utils/test_format_currency.py
+    import pytest
+    from app.utils.format_currency import format_currency
+
+    class TestFormatCurrency:
+        def test_formats_number_as_gbp_by_default(self):
+            # Arrange
+            amount = 1234.50
+
+            # Act
+            result = format_currency(amount)
+
+            # Assert
+            assert result == "£1,234.50"
+
+        def test_formats_number_in_specified_currency(self):
+            assert format_currency(99.90, currency="USD") == "$99.90"
+
+        def test_returns_zero_string_for_zero_input(self):
+            assert format_currency(0) == "£0.00"
+
+        def test_raises_type_error_for_non_finite_input(self):
+            with pytest.raises(TypeError):
+                format_currency(float("nan"))
+
+        @pytest.mark.parametrize("amount,currency,expected", [
+            (10.0,  "GBP", "£10.00"),
+            (10.0,  "EUR", "€10.00"),
+            (10.0,  "USD", "$10.00"),
+        ])
+        def test_supports_multiple_currencies(self, amount, currency, expected):
+            assert format_currency(amount, currency=currency) == expected
+    ```
+
+    ### pytest — Mocking with monkeypatch
+
+    ```python
+    # app/services/test_email_service.py
+    from app.services.email_service import send_welcome_email
+
+    def test_sends_welcome_email_to_new_user(monkeypatch):
+        # Arrange
+        sent_messages = []
+
+        def fake_send(to, subject, body):
+            sent_messages.append({"to": to, "subject": subject})
+
+        monkeypatch.setattr("app.services.email_service.smtp_client.send", fake_send)
+
+        # Act
+        send_welcome_email(user_email="alice@example.com")
+
+        # Assert
+        assert len(sent_messages) == 1
+        assert sent_messages[0]["to"] == "alice@example.com"
+        assert "Welcome" in sent_messages[0]["subject"]
+    ```
+  </Tab>
+</Tabs>
+
+## Snapshot Tests
+
+Use snapshot tests **sparingly** and only for stable, deliberately static UI — things like icon sets, email templates, or design-system primitives that should never change without explicit review. Do not use snapshots for dynamic components whose output changes regularly; they create noise and reviewers stop paying attention to snapshot diffs.
+
+```tsx
+it('should match the icon snapshot', () => {
+  const { container } = render(<CheckIcon size={24} />)
+  expect(container).toMatchSnapshot()
+})
+```
+
+When a snapshot legitimately changes, update it deliberately with `npm run test -- --updateSnapshot` and include the updated snapshot file in your PR with an explanation.
+
+<Tip>
+  If you find a component test is brittle and breaks on every minor visual tweak, it is a sign that the test is asserting implementation details rather than behaviour. Refactor it to use `getByRole`, `getByLabelText`, or `getByText` instead.
+</Tip>

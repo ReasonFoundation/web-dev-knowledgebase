@@ -1,0 +1,84 @@
+---
+title: "Monitoring Overview: Datadog, Metrics, and Dashboards"
+sidebarTitle: "Overview"
+description: "A guide to our full observability stack — how metrics, traces, logs, and dashboards are collected, where to find them, and how SLOs are defined per service."
+---
+
+Observability is how you know what your service is doing at any moment, and how you diagnose what went wrong after an incident. Our stack is built around Datadog as the single pane of glass for metrics, traces, and logs. Every service running in the cluster emits all three signal types automatically through agents and SDKs we have already wired up — your job is to know how to read them and how to extend them when you need custom visibility.
+
+## The Four Pillars
+
+<CardGroup cols={2}>
+  <Card title="Metrics" icon="chart-line">
+    **Collected via the Datadog Agent on EKS.** The agent runs as a DaemonSet and scrapes standard Kubernetes and container metrics automatically. Every pod in the cluster gets CPU, memory, network, and restart metrics with no configuration required. Service-level metrics (request rate, error rate, latency) are collected via the Datadog APM trace stats pipeline.
+
+    Access metrics in the [Datadog Metrics Explorer](https://app.datadoghq.com/metric/explorer). Use the metric summary page to browse available metrics for a given service tag.
+  </Card>
+  <Card title="Traces" icon="arrows-split-up-and-left">
+    **Collected via Datadog APM with OpenTelemetry export.** Services instrument their code using the OpenTelemetry SDK and export traces to the Datadog agent, which forwards them to the APM backend. This gives you distributed traces across service boundaries — you can follow a single request from the API gateway through downstream services to the database query.
+
+    Access traces in the [APM Service Map](https://app.datadoghq.com/apm/map) and the [Trace Explorer](https://app.datadoghq.com/apm/traces).
+  </Card>
+  <Card title="Logs" icon="file-lines">
+    **Structured JSON logs shipped to Datadog Logs.** Services write structured JSON to stdout, and the Datadog agent tails container logs and forwards them. Log parsing rules in Datadog extract standard fields (`level`, `service`, `traceId`, `message`) automatically. Logs and traces are correlated via the `dd.trace_id` field injected by the APM SDK.
+
+    Access logs in the [Datadog Log Explorer](https://app.datadoghq.com/logs). See the [Logging standards page](/ops/monitoring/logging) for the required log format and how to query effectively.
+  </Card>
+  <Card title="Dashboards" icon="gauge">
+    **Standard service dashboards provisioned from a shared template.** Every service gets a dashboard cloned from the **Service Dashboard Template** in Datadog. It includes panels for request rate, error rate, p50/p95/p99 latency, pod health, and top slow traces. Find your service dashboard by searching for its name in the [Datadog Dashboards list](https://app.datadoghq.com/dashboard/lists).
+
+    When you add a new service, clone the template and update the `service` tag filter on each panel to match your service name.
+  </Card>
+</CardGroup>
+
+## SLOs
+
+Each service defines its availability and performance commitments as Datadog SLOs. SLOs are managed as code in the `monitoring-as-code` repository using Terraform. The two required SLOs per service are:
+
+| SLO | Target | Window |
+|---|---|---|
+| Availability (HTTP success rate) | 99.9% | 30-day rolling |
+| Latency (p99 < 500ms) | 99% | 7-day rolling |
+
+Find your service SLOs in the [Datadog SLO dashboard](https://app.datadoghq.com/slo). If the error budget drops below 20%, an alert fires to the service team Slack channel. Below 5%, PagerDuty is notified.
+
+## Standard Metric Tags
+
+All metrics, traces, and logs must carry the following tags. The Datadog agent injects `env` and `version` automatically from pod labels if you include them in your deployment manifest — verify your deployment spec includes them.
+
+```yaml
+# k8s-manifests/prod/<service>/deployment.yaml
+labels:
+  tags.datadoghq.com/env: "production"
+  tags.datadoghq.com/service: "api-gateway"
+  tags.datadoghq.com/version: "v1.5.0"
+```
+
+<Tip>
+  Tag **all** custom metrics with `env`, `service`, and `version`. Untagged metrics are nearly impossible to filter in a multi-service dashboard and will be flagged in monthly observability reviews. If you emit a metric from application code, pass all three tags explicitly:
+
+  ```javascript
+  // Node.js — dogstatsd client
+  statsd.increment('api.cache.miss', 1, {
+    tags: ['env:production', 'service:api-gateway', 'version:v1.5.0'],
+  });
+  ```
+</Tip>
+
+## Adding Custom Metrics
+
+For business-level or application-specific metrics that are not covered by the Datadog agent's automatic collection, use the `dogstatsd` client library for your language.
+
+<Note>
+  Use the `dogstatsd` client (not the generic StatsD client) to emit custom metrics. Only `dogstatsd` supports the Datadog tag syntax and will correctly attribute metrics to your service in the explorer. The client is available as `hot-shots` for Node.js and `datadog` for Python.
+
+  ```bash
+  # Node.js
+  npm install hot-shots
+
+  # Python
+  pip install datadog
+  ```
+
+  Custom metrics count toward your Datadog custom metric quota. Check the current quota usage in the [Datadog account settings](https://app.datadoghq.com/account/usage) before adding high-cardinality metrics (e.g., per-user-ID gauges). Discuss high-volume custom metrics with the platform team first.
+</Note>

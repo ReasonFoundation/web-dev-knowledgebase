@@ -1,0 +1,138 @@
+---
+title: "Incident Response: Declare, Triage, Resolve, and Review"
+sidebarTitle: "Incident Response"
+description: "A step-by-step guide to managing incidents from declaration through post-incident review, including severity levels, roles, and communication cadences."
+---
+
+Every engineer on the team shares responsibility for handling incidents well. A clear, repeatable process keeps customer impact short, communication transparent, and root causes understood. This runbook walks you through the full incident lifecycle — from the moment something breaks to the post-incident review that prevents it from happening again.
+
+## Severity Levels
+
+Use the table below to classify an incident as soon as you declare it. When in doubt, err on the side of the higher severity — you can always downgrade once you have more information.
+
+| Severity | Label | Definition | Example |
+|----------|-------|------------|---------|
+| **P1** | Critical | Production is down or data loss is occurring | Checkout flow returning 500s; database writes failing |
+| **P2** | Major | A major feature is degraded; no data loss | Search returning stale results; slow API responses (>5s) |
+| **P3** | Minor | A non-critical feature is broken; no data loss | Dashboard widget not rendering; a low-traffic endpoint erroring |
+| **P4** | Cosmetic | UI or copy issue; no functional impact | Wrong colour on a button; typo on a marketing page |
+
+## Roles
+
+Every P1 and P2 incident requires three roles to be filled before triage begins. Assign them explicitly in the war room channel.
+
+- **Incident Commander (IC)** — Owns the incident end-to-end. Keeps the team focused, drives decisions, and ensures the communication cadence is met. The IC does _not_ fix things directly.
+- **Tech Lead** — Investigates the root cause, proposes and implements the fix or rollback, and coordinates any required infrastructure changes.
+- **Comms Lead** — Updates stakeholders and the incident channel on schedule. Drafts the status-page message and any customer-facing communication.
+
+For P3 and P4 incidents a single engineer can cover all three roles.
+
+## Response Procedure
+
+<Steps>
+  <Step title="Declare the incident">
+    Run the slash command in the `#incidents` Slack channel. Replace `p1` with the appropriate severity.
+
+    ```
+    /incident declare p1 Checkout flow returning 500s for all users
+    ```
+
+    This command automatically creates a dedicated war room channel (e.g. `#incident-2024-06-15-checkout`) and opens a linked PagerDuty incident. Join that channel immediately and pin the PagerDuty link.
+  </Step>
+
+  <Step title="Assign roles">
+    Post a role assignment message in the war room channel as the first thing you do. Use this template:
+
+    ```
+    🚨 Roles assigned
+    IC: @alice
+    Tech Lead: @bob
+    Comms Lead: @carol
+    ```
+
+    If you cannot fill a role, ping `@on-call-lead` immediately.
+  </Step>
+
+  <Step title="Identify scope">
+    Before forming any hypothesis, establish the blast radius. Answer these questions in the war room channel:
+
+    - Which services, endpoints, or features are affected?
+    - How many users are impacted (approximate percentage or absolute number)?
+    - When did the issue begin? Check Datadog dashboards and deployment history.
+    - Is the issue isolated to a single region or environment?
+  </Step>
+
+  <Step title="Assess impact and form a hypothesis">
+    With scope established, the Tech Lead proposes the most likely root cause in a short message prefixed with `🔍 Hypothesis:`. Align on the hypothesis before touching anything in production. Common starting points:
+
+    - Did a deployment happen within the last 30 minutes? Check ArgoCD.
+    - Did a config change or feature flag change go out?
+    - Are any upstream dependencies (databases, third-party APIs) reporting issues?
+  </Step>
+
+  <Step title="Implement fix or rollback">
+    Execute the agreed remediation. If you cannot identify a fix within 20 minutes, roll back to the last known good deployment:
+
+    ```bash
+    # Roll back via ArgoCD CLI
+    argocd app rollback <app-name> --revision <previous-revision>
+
+    # Or via kubectl
+    kubectl rollout undo deployment/<deployment-name> -n <namespace>
+    ```
+
+    Document every action taken in the war room channel with a timestamp so the timeline is accurate for the PIR.
+  </Step>
+
+  <Step title="Communicate on schedule">
+    The Comms Lead posts a status update on this cadence, even if there is nothing new to report:
+
+    - **P1** — Every 15 minutes
+    - **P2** — Every 30 minutes
+
+    Use this template:
+
+    ```
+    ⏱ [14:45 UTC] Update #3
+    Status: Investigating
+    Impact: ~15% of users cannot complete checkout
+    Next update: 15:00 UTC
+    ```
+
+    Update the public status page at https://status.example.com for any P1 or customer-visible P2.
+  </Step>
+
+  <Step title="Resolve the incident">
+    Once the service is fully restored and metrics confirm recovery (error rate back to baseline, latency normal), run the resolve command in the war room channel:
+
+    ```
+    /incident resolve
+    ```
+
+    Post a final summary in the war room channel covering: what broke, what fixed it, and the total duration. Then send a brief all-clear message in `#incidents`.
+  </Step>
+
+  <Step title="Schedule the post-incident review">
+    Open a PIR ticket in Jira immediately after resolution — do not wait until you feel ready to write it. Assign it to the Incident Commander and set the due date to 5 business days from the incident date. The IC is responsible for scheduling the 60-minute PIR meeting and circulating a draft document beforehand.
+  </Step>
+</Steps>
+
+<Warning>
+  Never silently resolve an incident by just fixing the underlying issue without running `/incident resolve` in Slack and posting a summary. Silent resolutions leave stakeholders without confirmation, corrupt your incident metrics, and mean no PIR is triggered. Every incident must be formally closed, no matter how small.
+</Warning>
+
+## Post-Incident Review (PIR)
+
+A PIR is **required for all P1 and P2 incidents** and must be completed within 5 business days. The goal is blameless learning, not attribution. The PIR document should cover:
+
+- **Timeline** — A minute-by-minute account of what happened, with timestamps.
+- **Root cause** — The underlying technical cause (not "human error").
+- **Contributing factors** — Everything that made the incident worse or harder to detect.
+- **What went well** — Steps the team took that shortened the incident.
+- **Action items** — Concrete, assigned, time-boxed tasks to prevent recurrence.
+
+Post the completed PIR document in the `#incidents` channel and link it to the PagerDuty incident record.
+
+<Note>
+  P3 and P4 incidents do not require a formal PIR, but you are encouraged to add a brief retrospective comment to the associated Jira ticket if the issue exposed a gap in monitoring or documentation.
+</Note>

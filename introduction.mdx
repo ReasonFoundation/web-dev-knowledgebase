@@ -1,0 +1,64 @@
+---
+title: "Web Dev & Ops Knowledgebase"
+sidebarTitle: "Introduction"
+description: "The central reference for our in-house web development and operations teams — standards, runbooks, guides, and tooling all in one place."
+---
+
+This knowledgebase is the single source of truth for how our web dev and ops teams build, deploy, and maintain our products. Whether you're onboarding, looking up a convention, or responding to an incident, start here.
+
+<CardGroup cols={2}>
+  <Card title="Development Standards" icon="code" href="/web-dev/standards">
+    Our coding conventions, naming rules, and quality bar for all projects
+  </Card>
+  <Card title="Tech Stack" icon="layer-group" href="/web-dev/tech-stack">
+    Languages, frameworks, and tools we use across the organisation
+  </Card>
+  <Card title="Deployment & CI/CD" icon="rocket" href="/ops/deployment/ci-cd-pipeline">
+    How code moves from a pull request to production
+  </Card>
+  <Card title="Incident Response" icon="triangle-exclamation" href="/ops/runbooks/incident-response">
+    Step-by-step guide for declaring and resolving incidents
+  </Card>
+</CardGroup>
+
+## Web Development
+
+Everything about how we write and ship code — frontend patterns, backend conventions, testing requirements, and version control workflows.
+
+<CardGroup cols={2}>
+  <Card title="Frontend Setup" icon="window" href="/web-dev/frontend/setup">
+    Bootstrap a new frontend project using our standard toolchain
+  </Card>
+  <Card title="Backend Setup" icon="server" href="/web-dev/backend/setup">
+    Set up a backend service following our conventions
+  </Card>
+  <Card title="Testing Overview" icon="flask" href="/web-dev/testing/overview">
+    Unit, integration, and end-to-end testing expectations
+  </Card>
+  <Card title="Branching Strategy" icon="code-branch" href="/web-dev/git/branching-strategy">
+    How we name branches and structure Git workflows
+  </Card>
+</CardGroup>
+
+## Operations
+
+Infrastructure topology, deployment pipelines, monitoring setup, and runbooks for on-call engineers.
+
+<CardGroup cols={2}>
+  <Card title="Infrastructure Overview" icon="network-wired" href="/ops/infrastructure/overview">
+    High-level map of our environments and infrastructure components
+  </Card>
+  <Card title="Release Process" icon="tag" href="/ops/deployment/release-process">
+    How we version, tag, and promote releases to production
+  </Card>
+  <Card title="Monitoring & Alerting" icon="bell" href="/ops/monitoring/alerting">
+    Alert routing, thresholds, and escalation paths
+  </Card>
+  <Card title="On-Call Guide" icon="phone" href="/ops/runbooks/on-call-guide">
+    Responsibilities, tools, and expectations for on-call engineers
+  </Card>
+</CardGroup>
+
+<Tip>
+  This knowledgebase is synced via GitHub. To add or update a page, open a pull request against the `main` branch. See the [pull request guide](/web-dev/git/pull-requests) for our review process.
+</Tip>

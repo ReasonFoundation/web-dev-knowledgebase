@@ -1,0 +1,110 @@
+---
+title: "Release Process: Versioning, Tagging, and Promotion"
+sidebarTitle: "Release Process"
+description: "How to cut, tag, and promote a production release — including the checklist, image tagging conventions, and post-release verification steps."
+---
+
+A release is a deliberate, documented promotion of a tested artifact from staging to production. Unlike the continuous flow of commits to dev and staging, production releases require a checklist, an approval, and a rollback plan before a single pod is updated. This page walks you through the full process from deciding it's time to release to confirming everything is healthy afterwards.
+
+## Versioning
+
+We follow [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PATCH`.
+
+| Part | Increment when… |
+|---|---|
+| `MAJOR` | You ship a breaking API or data-contract change |
+| `MINOR` | You ship backward-compatible new functionality |
+| `PATCH` | You ship backward-compatible bug fixes or hotfixes |
+
+Git tags use the `v` prefix — e.g., `v1.4.0`, `v1.4.1`. The tag is always placed on a commit in `main` that has already passed staging.
+
+**Release ownership** belongs to the team that owns the service. You are responsible for completing the checklist, coordinating with on-call, and verifying the release is healthy. Do not hand this off without an explicit handover.
+
+## Release Checklist
+
+Before you create a release tag, confirm all of the following:
+
+- All CI checks on `main` are green.
+- The commit you intend to tag has been deployed to staging and the automated smoke test has passed.
+- You have run a manual staging smoke test against any new user-facing functionality.
+- The on-call engineer for the service has been notified in the `#on-call` Slack channel.
+- A rollback plan is documented — at minimum, note the previous image tag you will revert to.
+
+## Full Release Procedure
+
+<Steps>
+  <Step title="Verify staging is green">
+    Open the [ArgoCD dashboard](https://argocd.internal.example.com) and confirm that the staging app for your service is synced and healthy. Check the [Datadog staging dashboard](https://app.datadoghq.com) for a clean baseline — no elevated error rate or latency.
+  </Step>
+  <Step title="Notify on-call">
+    Post in `#on-call` with the service name, version you are about to release, and your rollback plan. Example:
+
+    ```
+    🚀 Releasing api-gateway v1.5.0 to production in ~10 min.
+    Rollback target: api-gateway:a1b2c3d (v1.4.2)
+    Rollback plan: revert k8s-manifests/prod/api-gateway/deployment.yaml image tag and sync ArgoCD.
+    ```
+  </Step>
+  <Step title="Create and push the release tag">
+    Tag the commit on `main` that is currently deployed to staging:
+
+    ```bash
+    git checkout main
+    git pull origin main
+    git tag v1.5.0
+    git push origin v1.5.0
+    ```
+
+    Pushing the tag triggers the CI pipeline, which builds a release image tagged with both the version and the commit SHA — e.g., `api-gateway:v1.5.0` and `api-gateway:a3f8c12`.
+  </Step>
+  <Step title="Create a GitHub Release">
+    Navigate to **Releases → Draft a new release** in the GitHub repository. Select the tag you just pushed, set the title to `v1.5.0`, and paste in the changelog. The changelog should list every merged PR since the previous release, grouped by type (Features, Fixes, Chores). Use the **Generate release notes** button as a starting point, then edit for clarity.
+  </Step>
+  <Step title="Update the production manifest">
+    In the `k8s-manifests` repository, update the image tag for your service in `k8s-manifests/prod/<service-name>/deployment.yaml`:
+
+    ```yaml
+    containers:
+      - name: api-gateway
+        image: 123456789.dkr.ecr.us-east-1.amazonaws.com/api-gateway:v1.5.0
+    ```
+
+    Open a pull request against `main` in `k8s-manifests`. Title it `release(api-gateway): v1.5.0`.
+  </Step>
+  <Step title="Get approval and merge">
+    The production manifest PR requires at least one approval from another engineer on the service team. Once approved, merge it. ArgoCD detects the diff and begins syncing the production cluster.
+  </Step>
+  <Step title="Monitor post-release">
+    Watch the following for at least 15 minutes after ArgoCD reports the sync as complete:
+
+    - Error rate in Datadog — should remain below 1%.
+    - p99 latency — should remain within the established baseline.
+    - Pod restart count in the Datadog Kubernetes dashboard — should be zero.
+    - Any active PagerDuty alerts for the service.
+
+    If anything spikes, follow the [Rollback Procedures](/ops/deployment/rollback-procedures) immediately.
+  </Step>
+  <Step title="Close the loop">
+    Post a follow-up in `#on-call` confirming the release is stable. Update the GitHub Release description if any issues were caught and resolved during rollout.
+  </Step>
+</Steps>
+
+## Post-Release Verification
+
+After the 15-minute observation window, do a final check:
+
+- Open the Datadog SLO dashboard for the service and confirm the error budget is not being consumed faster than the configured burn rate.
+- Verify the correct image tag is running: `kubectl get pods -n production -l app=api-gateway -o jsonpath='{.items[0].spec.containers[0].image}'`
+- Check that all replicas are `Ready`: `kubectl rollout status deployment/api-gateway -n production`
+
+<Tip>
+  Use the release script at `scripts/release.sh` to automate steps 3–4. It checks out `main`, validates that the commit is deployed to staging, creates the tag, pushes it, and opens a browser tab for the GitHub Release draft. Run it with:
+
+  ```bash
+  ./scripts/release.sh <service-name> <version>
+  # Example:
+  ./scripts/release.sh api-gateway 1.5.0
+  ```
+
+  The script enforces the `v` prefix, validates the version format, and will refuse to tag a commit that is not currently live on staging.
+</Tip>

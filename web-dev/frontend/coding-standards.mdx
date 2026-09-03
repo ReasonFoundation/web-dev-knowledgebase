@@ -1,0 +1,204 @@
+---
+title: "Frontend Coding Standards for React and TypeScript"
+sidebarTitle: "Coding Standards"
+description: "Team rules for TypeScript strictness, component structure, state management, import ordering, and async patterns that keep our codebase consistent and maintainable."
+---
+
+These standards are the non-negotiable baseline for all frontend code in the organisation. They exist to reduce cognitive overhead when reading unfamiliar code, prevent entire classes of runtime bugs, and keep automated tooling (ESLint, TypeScript compiler, CI) happy. When in doubt, follow the pattern already present in the codebase — and if you disagree with a rule, raise it in the #frontend channel rather than working around it silently.
+
+## TypeScript Strictness
+
+Always keep `strict: true` in `tsconfig.json`. This enables a bundle of compiler flags — including `strictNullChecks`, `noImplicitAny`, and `strictFunctionTypes` — that catch real bugs before they reach production. Never weaken or override individual flags that `strict` enables.
+
+```json
+// tsconfig.json
+{
+  "compilerOptions": {
+    "strict": true,
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"]
+    }
+  }
+}
+```
+
+**Never use the `any` type.** If you receive data from an external source (API response, `localStorage`, a third-party library with poor types), use `unknown` and narrow the type explicitly with a type guard or a validation library like Zod.
+
+```ts
+// ❌ Don't do this
+function processResponse(data: any) {
+  return data.user.name;
+}
+
+// ✅ Do this
+import { z } from "zod";
+
+const UserSchema = z.object({
+  user: z.object({ name: z.string() }),
+});
+
+function processResponse(data: unknown) {
+  const parsed = UserSchema.parse(data);
+  return parsed.user.name;
+}
+```
+
+## Component Structure
+
+Follow these rules for every React component file:
+
+- **One component per file.** Co-locate the component's styles (CSS Module or styled import) and its unit test in the same folder.
+- **Name the file after the component.** `UserCard.tsx`, `UserCard.module.css`, `UserCard.test.tsx`.
+- **Export the component as a named export**, not a default export. Default exports make refactoring harder and break certain import tooling.
+
+```
+src/components/features/UserCard/
+├── UserCard.tsx
+├── UserCard.module.css
+├── UserCard.test.tsx
+└── index.ts          ← re-exports UserCard for clean external imports
+```
+
+<CodeGroup>
+```tsx Bad — avoid this pattern
+// UserCard.tsx
+import React from 'react'
+
+export default function (props: any) {
+  return (
+    <div style={{ padding: 16, border: '1px solid #ccc' }}>
+      <h2>{props.name}</h2>
+      <p>{props.email}</p>
+      {props.isAdmin && <span>Admin</span>}
+    </div>
+  )
+}
+```
+
+```tsx Good — follow this pattern
+// UserCard.tsx
+import styles from './UserCard.module.css';
+
+export interface UserCardProps {
+  name: string;
+  email: string;
+  isAdmin?: boolean;
+}
+
+export function UserCard({ name, email, isAdmin = false }: UserCardProps) {
+  return (
+    <article className={styles.card}>
+      <h2 className={styles.name}>{name}</h2>
+      <p className={styles.email}>{email}</p>
+      {isAdmin && <span className={styles.badge}>Admin</span>}
+    </article>
+  );
+}
+```
+</CodeGroup>
+
+## State Management Rules
+
+Choose the right tool for the job — avoid reaching for global state before you need it.
+
+1. **Local state first.** Use `useState` or `useReducer` for state that only one component or a small subtree needs.
+2. **React Query for server state.** Any data that is fetched from an API belongs in React Query (`@tanstack/react-query`). Do not store server responses in Zustand or component state.
+3. **Zustand for global client state.** Truly global UI state (authenticated user session, theme preference, modal open/close flags) lives in a Zustand store. Keep stores small and focused — one store per domain.
+
+```ts
+// stores/useAuthStore.ts
+import { create } from 'zustand';
+
+interface AuthState {
+  userId: string | null;
+  setUserId: (id: string | null) => void;
+}
+
+export const useAuthStore = create<AuthState>((set) => ({
+  userId: null,
+  setUserId: (id) => set({ userId: id }),
+}));
+```
+
+## Import Order
+
+All imports must follow this order, enforced automatically by the `eslint-plugin-import` rules already configured in the template:
+
+1. External packages (e.g. `react`, `react-router-dom`, `@tanstack/react-query`)
+2. Internal path aliases (e.g. `@/components/...`, `@/hooks/...`)
+3. Relative imports (e.g. `./UserCard`, `../utils`)
+4. Type-only imports (use `import type` for TypeScript types)
+
+```ts
+// ✅ Correct import order
+import { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
+
+import { Button } from '@/components/ui/Button';
+import { useAuthStore } from '@/stores/useAuthStore';
+
+import { formatDate } from './utils';
+
+import type { UserCardProps } from './UserCard';
+```
+
+Run `npm run lint --fix` to auto-correct import order violations before committing.
+
+## Async / Await
+
+Always use `async/await` over raw Promise chains. It produces code that is easier to read, easier to debug in stack traces, and less error-prone when handling errors.
+
+```ts
+// ❌ Promise chains — avoid
+function loadUser(id: string) {
+  return fetch(`/api/users/${id}`)
+    .then((res) => res.json())
+    .then((data) => data.user)
+    .catch((err) => console.error(err));
+}
+
+// ✅ async/await — use this
+async function loadUser(id: string) {
+  try {
+    const res = await fetch(`/api/users/${id}`);
+    const data = await res.json();
+    return data.user;
+  } catch (err) {
+    console.error(err);
+    throw err; // re-throw so callers can handle it
+  }
+}
+```
+
+## ESLint Rule Reference
+
+The following rules are configured in `.eslintrc.cjs` and enforced in CI. Understand what each one prevents before disabling it — and if you believe a rule should be changed globally, open a PR to the template repo.
+
+<Accordion title="no-explicit-any">
+  Prevents use of the `any` type anywhere in the codebase. If you are genuinely unsure of a type, use `unknown` and narrow it. This rule cannot be disabled per-file with an inline comment in our configuration.
+</Accordion>
+
+<Accordion title="react-hooks/rules-of-hooks">
+  Enforces that React Hooks are only called at the top level of a function component or a custom hook — never inside loops, conditions, or nested functions. Violations cause subtle and hard-to-reproduce bugs.
+</Accordion>
+
+<Accordion title="react-hooks/exhaustive-deps">
+  Warns when a `useEffect`, `useCallback`, or `useMemo` dependency array is missing variables that are referenced inside the callback. Always fix the root cause rather than suppressing this warning.
+</Accordion>
+
+<Accordion title="import/order">
+  Enforces the import ordering described above. Auto-fixable — run `npm run lint --fix` to correct violations automatically.
+</Accordion>
+
+<Accordion title="@typescript-eslint/no-floating-promises">
+  Flags Promises that are not awaited and do not have a `.catch()` handler. Floating promises swallow errors silently. Await the call or explicitly `void` it if you intentionally do not need the result.
+</Accordion>
+
+<Accordion title="no-console">
+  Warns on `console.log` and similar calls in production code. Use the internal `logger` utility from `@/lib/logger` instead. `console.error` in `catch` blocks is permitted.
+</Accordion>

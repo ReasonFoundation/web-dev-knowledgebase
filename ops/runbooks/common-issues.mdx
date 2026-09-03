@@ -1,0 +1,242 @@
+---
+title: "Common Issues and Quick Fixes for On-Call Engineers"
+sidebarTitle: "Common Issues"
+description: "A quick-reference guide to the most frequently recurring production issues, with copy-paste diagnostic commands and step-by-step remediation for each scenario."
+---
+
+This page is your first stop when an alert fires and you need to move fast. Each section below covers a known recurring issue, how to confirm it, and the fastest path to resolution. The issues are not exhaustive — production always finds new ways to surprise you — but they account for the majority of pages the on-call rotation receives.
+
+<Note>
+  If you are dealing with an issue not covered here, post in `#ops-help` on Slack. Include the alert name, relevant log lines, and what you have already tried. The team will help you resolve it and, if it recurs, we will add it to this page.
+</Note>
+
+## Issue Reference
+
+<Accordion title="Pod stuck in CrashLoopBackOff">
+  A pod in `CrashLoopBackOff` means Kubernetes is repeatedly starting the container, the container is exiting with a non-zero code, and Kubernetes is backing off before trying again. The most reliable diagnostic is the log from the previous (crashed) container.
+
+  **Diagnose:**
+
+  ```bash
+  # Check the pod status and restart count
+  kubectl get pods -n <namespace>
+
+  # Read logs from the previously crashed container
+  kubectl logs <pod-name> -n <namespace> --previous
+
+  # Get more detail on the pod state and events
+  kubectl describe pod <pod-name> -n <namespace>
+  ```
+
+  Look for these common patterns in the logs:
+
+  - **Startup error referencing an environment variable** — the pod is missing a required secret or the secret value is wrong.
+  - **"connection refused" or "dial tcp" errors** — the pod cannot reach a dependency (database, Redis, another service) at startup.
+  - **OOMKilled in `describe` output** — the container is exceeding its memory limit before it finishes starting.
+
+  **Fix:**
+
+  1. If the issue is a missing or incorrect secret, check the relevant Kubernetes secret and compare it to what the application expects:
+
+     ```bash
+     kubectl get secret <secret-name> -n <namespace> -o jsonpath='{.data}' | base64 --decode
+     ```
+
+     Update the secret via the Terraform secrets module or AWS Secrets Manager (depending on how the secret is managed) and restart the pod.
+
+  2. If the issue is database unreachability, verify network connectivity from within the cluster and check the RDS instance status in the AWS console. Confirm the correct hostname and port are in the application's config.
+
+  3. If the issue is OOMKilled, increase the memory limit in the Helm values file and redeploy via ArgoCD.
+</Accordion>
+
+<Accordion title="Database connection pool exhausted">
+  **Symptom:** Applications log `too many connections` or `connection pool exhausted` errors. Queries start failing or queuing. You may see a spike in API error rates or latency in Datadog coinciding with the errors.
+
+  **Diagnose:**
+
+  ```bash
+  # Check current connection count on PostgreSQL
+  kubectl exec -it <postgres-pod-or-bastion> -n <namespace> -- \
+    psql -U postgres -c "SELECT count(*), state FROM pg_stat_activity GROUP BY state;"
+
+  # Identify which applications hold the most connections
+  kubectl exec -it <postgres-pod-or-bastion> -n <namespace> -- \
+    psql -U postgres -c \
+    "SELECT application_name, count(*) FROM pg_stat_activity GROUP BY application_name ORDER BY count DESC;"
+  ```
+
+  **Fix:**
+
+  1. Look for connection leaks — connections stuck in `idle` state for a long time indicate the application is not releasing connections properly. Check for a recent code change to connection-handling logic.
+
+  2. Restart the affected application pods to flush stale connections. This is a short-term fix; do it while you investigate the root cause:
+
+     ```bash
+     kubectl rollout restart deployment/<deployment-name> -n <namespace>
+     ```
+
+  3. If the connection count is legitimately high due to increased traffic (not a leak), increase the pool size in the service's configuration. This is typically a `DATABASE_POOL_SIZE` environment variable in the Helm values. Open a PR to update it and deploy via ArgoCD.
+
+  4. For a longer-term fix, consider adding [PgBouncer](https://www.pgbouncer.org/) as a connection pooler in front of the database. Raise this in the next team sync if it is a recurring issue.
+</Accordion>
+
+<Accordion title="High error rate spike after deploy">
+  A sudden rise in 5xx error rates immediately following a deployment is one of the most common on-call scenarios. Act quickly — the longer a broken deploy runs, the more customers are affected.
+
+  **Diagnose:**
+
+  1. Open the [Datadog APM Service Map](https://app.datadoghq.com/apm/map) and identify which service the errors are originating from.
+  2. Drill into the error traces to see the exception type and stack trace.
+  3. Cross-reference with the deployment that went out — check ArgoCD for the exact diff.
+
+  ```bash
+  # Check the rollout status
+  kubectl rollout status deployment/<deployment-name> -n <namespace>
+
+  # Stream live logs for the affected service
+  kubectl logs -f deployment/<deployment-name> -n <namespace> --tail=100
+  ```
+
+  **Fix:**
+
+  - If the error rate is above **2% after 5 minutes** post-deploy, roll back immediately. Do not wait for a code fix:
+
+    ```bash
+    # Roll back via ArgoCD CLI
+    argocd app rollback <app-name> --revision <previous-revision>
+
+    # Or directly via kubectl
+    kubectl rollout undo deployment/<deployment-name> -n <namespace>
+    ```
+
+  - Confirm the rollback succeeded by watching the error rate drop in Datadog.
+  - Post a message in the `#deployments` channel tagging the engineer who shipped the deploy, so they can investigate the root cause without pressure.
+  - If the error rate is below 2% and decreasing, continue monitoring for 10 minutes before concluding the deploy is healthy.
+</Accordion>
+
+<Accordion title="Deployment stuck in Progressing state in ArgoCD">
+  A deployment that stays in `Progressing` longer than a few minutes usually means the new pods are failing to become ready, and Kubernetes is waiting for them to pass health checks before completing the rollout.
+
+  **Diagnose:**
+
+  1. Open the ArgoCD UI and click into the application. Look for pods marked as `OutOfSync` or resources showing error badges.
+  2. Identify the failing pod and inspect it:
+
+     ```bash
+     kubectl describe pod <failing-pod-name> -n <namespace>
+     ```
+
+  3. Look for these common causes in the `Events` section of the `describe` output:
+
+     - **`ErrImagePull` / `ImagePullBackOff`** — The pod cannot pull its container image. This is usually an ECR authentication issue or a missing/mistagged image.
+     - **`Insufficient cpu` / `Insufficient memory`** — The namespace or node has hit a resource quota. No new pods can be scheduled until resources free up.
+     - **Readiness probe failures** — The application is starting but not passing its readiness check. Check the logs.
+
+  **Fix:**
+
+  - **ECR auth error:** Refresh the ECR credentials secret in the namespace:
+
+    ```bash
+    # Re-authenticate the node group to ECR
+    aws ecr get-login-password --region eu-west-1 --profile production | \
+      docker login --username AWS --password-stdin \
+      <account-id>.dkr.ecr.eu-west-1.amazonaws.com
+    ```
+
+    If the image tag itself does not exist in ECR, the deploy must be corrected at the source. Ping the deploying engineer.
+
+  - **Resource quota exhaustion:** Check current quota usage and identify pods that can be scaled down or cleaned up:
+
+    ```bash
+    kubectl describe resourcequota -n <namespace>
+    kubectl top pods -n <namespace>
+    ```
+
+  - **Readiness probe failure:** Check logs for the reason the app is not healthy and treat it as a [high error rate after deploy](#high-error-rate-spike-after-deploy). Roll back if needed.
+</Accordion>
+
+<Accordion title="SSL certificate expiry alert">
+  ACM certificates attached to ALB listeners **auto-renew** as long as the DNS validation record is in place. An expiry alert almost always means either the DNS record was deleted, the certificate is not actually attached to an active listener, or (rarely) the auto-renewal failed.
+
+  **Diagnose:**
+
+  1. Open the AWS Certificate Manager console and find the certificate by domain name.
+  2. Check the **Status** field. `Issued` means it is valid; `Pending validation` means DNS validation is failing.
+  3. Check that the certificate's CNAME validation record exists in Route 53:
+
+     ```bash
+     # Get the expected CNAME name and value from ACM
+     aws acm describe-certificate \
+       --certificate-arn <arn> \
+       --region eu-west-1 \
+       --profile production \
+       --query 'Certificate.DomainValidationOptions'
+     ```
+
+  4. Confirm the certificate is attached to the correct ALB listener in the EC2 console (Load Balancers → Listeners → Certificates).
+
+  **Fix:**
+
+  - If the DNS validation record is missing, add it back in Route 53 (it is defined in Terraform under `infra/dns/`). ACM will automatically re-validate and renew within minutes.
+  - If the certificate has already expired and needs immediate renewal, trigger a manual renew:
+
+    ```bash
+    aws acm renew-certificate \
+      --certificate-arn <arn> \
+      --region eu-west-1 \
+      --profile production
+    ```
+
+  - Confirm the renewed certificate status becomes `Issued` before closing the alert.
+  - If the certificate is not attached to the correct ALB listener, update the listener in Terraform and apply the change.
+</Accordion>
+
+<Accordion title="Redis memory full">
+  When ElastiCache Redis approaches 100% memory, it either starts evicting keys (if an eviction policy is set) or begins rejecting writes (if no policy is configured). Both outcomes can cause hard-to-diagnose application errors.
+
+  **Diagnose:**
+
+  The alert originates from Datadog's ElastiCache integration. To investigate further, connect to the Redis instance via a bastion or a debug pod:
+
+  ```bash
+  # Connect to Redis (use the internal endpoint from the AWS console)
+  redis-cli -h <redis-endpoint> -p 6379
+
+  # Check memory usage and configuration
+  redis-cli -h <redis-endpoint> INFO memory
+
+  # Check the eviction policy
+  redis-cli -h <redis-endpoint> CONFIG GET maxmemory-policy
+  ```
+
+  The `used_memory_human` and `maxmemory_human` fields in `INFO memory` tell you how close to the limit you are.
+
+  **Fix:**
+
+  1. **Verify the eviction policy.** The expected policy is `allkeys-lru`. If it is set to `noeviction`, Redis will reject writes when memory is full — this causes application errors immediately. Update it at runtime without a restart:
+
+     ```bash
+     redis-cli -h <redis-endpoint> CONFIG SET maxmemory-policy allkeys-lru
+     ```
+
+     Also update the value in Terraform (`infra/elasticache/main.tf`) so it persists across recreations.
+
+  2. **Check for unexpected data growth.** If memory usage appears legitimate (e.g. the application recently started caching much more data), the instance needs to be scaled up. Do this via Terraform — do not resize manually in the console:
+
+     ```bash
+     # In the infra repo, update the node type and apply
+     # e.g. change cache.t3.medium to cache.t3.large
+     terraform plan -target=module.elasticache
+     terraform apply -target=module.elasticache
+     ```
+
+     Scaling ElastiCache may cause a brief failover to the replica. Notify the team in `#on-call` before applying.
+
+  3. **If writes are failing right now** and you need immediate relief, flush only expendable cache keys using a pattern match (do not flush the entire keyspace without confirming with the team):
+
+     ```bash
+     # Example: flush all session cache keys (confirm the prefix first)
+     redis-cli -h <redis-endpoint> --scan --pattern "session:*" | \
+       redis-cli -h <redis-endpoint> DEL
+     ```
+</Accordion>

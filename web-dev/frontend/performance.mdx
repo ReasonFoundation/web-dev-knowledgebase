@@ -1,0 +1,229 @@
+---
+title: "Frontend Performance: Core Web Vitals and Best Practices"
+sidebarTitle: "Performance"
+description: "Performance targets, code splitting, image optimisation, bundle analysis, memoisation rules, and prefetching strategies to keep our apps fast in production."
+---
+
+Performance is a feature. Slow page loads directly reduce task completion rates for internal tools and damage user trust in customer-facing products. This page defines the performance targets the team is expected to hit, the techniques you should reach for first, and the traps that make performance work harder than it needs to be.
+
+<Warning>
+  Avoid premature optimisation. Do not add `React.memo`, `useMemo`, `useCallback`, or any code-splitting boundary until you have profiling data that identifies a real bottleneck. Premature optimisation adds code complexity, increases the chance of stale-closure bugs, and frequently provides no measurable benefit. Measure first, then optimise.
+</Warning>
+
+## Core Web Vitals Targets
+
+All pages must pass these thresholds in the **75th percentile** of field data (or in a Lighthouse lab audit when field data is unavailable). These numbers align with Google's "Good" tier and our internal SLA.
+
+| Metric | Full Name | Target |
+|---|---|---|
+| **LCP** | Largest Contentful Paint | < 2.5 s |
+| **FID** | First Input Delay | < 100 ms |
+| **CLS** | Cumulative Layout Shift | < 0.1 |
+| **INP** | Interaction to Next Paint | < 200 ms |
+| **TTFB** | Time to First Byte | < 600 ms |
+
+Track these metrics in the monthly performance review. Any page that regresses below the target triggers a P2 ticket assigned to the owning team.
+
+<Note>
+  Lighthouse runs automatically in CI for every pull request targeting `main`. The CI step fails if LCP exceeds 4 s or CLS exceeds 0.25 on the desktop preset. Fix regressions before merging — do not merge with a suppressed Lighthouse step. Check the `lighthouse-report.html` artefact in the GitHub Actions summary for the full audit.
+</Note>
+
+## Code Splitting
+
+Vite handles module bundling, but you must tell it where to split. Use `React.lazy` with `Suspense` to split at the route level so users only download the JavaScript they need for the current page.
+
+### Lazy-Loaded Routes
+
+```tsx
+// src/router.tsx
+import { Suspense, lazy } from 'react';
+import { createBrowserRouter, RouterProvider } from 'react-router-dom';
+import { PageSpinner } from '@/components/ui/PageSpinner';
+
+const DashboardPage = lazy(() => import('@/pages/DashboardPage'));
+const SettingsPage  = lazy(() => import('@/pages/SettingsPage'));
+const BillingPage   = lazy(() => import('@/pages/BillingPage'));
+
+const router = createBrowserRouter([
+  {
+    path: '/',
+    element: (
+      <Suspense fallback={<PageSpinner />}>
+        <DashboardPage />
+      </Suspense>
+    ),
+  },
+  {
+    path: '/settings',
+    element: (
+      <Suspense fallback={<PageSpinner />}>
+        <SettingsPage />
+      </Suspense>
+    ),
+  },
+  {
+    path: '/billing',
+    element: (
+      <Suspense fallback={<PageSpinner />}>
+        <BillingPage />
+      </Suspense>
+    ),
+  },
+]);
+
+export function AppRouter() {
+  return <RouterProvider router={router} />;
+}
+```
+
+Place the `Suspense` boundary as close to the lazy component as makes sense for the UX — a full-page spinner is acceptable for route transitions, but not for a lazy-loaded panel inside an already-rendered page.
+
+### Lazy-Loaded Heavy Components
+
+Apply the same pattern to large, non-critical UI components (rich text editors, chart libraries, map embeds):
+
+```tsx
+import { Suspense, lazy } from 'react';
+
+const RichTextEditor = lazy(() => import('@/components/features/RichTextEditor'));
+
+function NoteEditor() {
+  return (
+    <Suspense fallback={<div className={styles.editorSkeleton} aria-label="Loading editor…" />}>
+      <RichTextEditor />
+    </Suspense>
+  );
+}
+```
+
+## Image Optimisation
+
+Images are the most common cause of poor LCP scores. Follow these rules for every image you add.
+
+**Use WebP format.** Convert source images to WebP before committing them. For images served from the CDN, the image pipeline handles conversion automatically — upload the original and reference the CDN URL with a `.webp` extension.
+
+**Always specify `width` and `height` attributes.** This prevents layout shift (CLS) by reserving space before the image loads. Both attributes are required even when you control sizing with CSS.
+
+**Use native lazy loading for below-the-fold images.** Add `loading="lazy"` to any image that is not in the initial viewport.
+
+**Never lazy-load the LCP image.** The hero image or first visible content image must load eagerly. Using `loading="lazy"` on the LCP element is one of the most common causes of poor LCP scores.
+
+```tsx
+// src/components/ui/OptimisedImage/OptimisedImage.tsx
+export interface OptimisedImageProps {
+  src: string;
+  alt: string;
+  width: number;
+  height: number;
+  /** Set to true for hero/LCP images — disables lazy loading */
+  priority?: boolean;
+  className?: string;
+}
+
+export function OptimisedImage({
+  src,
+  alt,
+  width,
+  height,
+  priority = false,
+  className,
+}: OptimisedImageProps) {
+  return (
+    <img
+      src={src}
+      alt={alt}
+      width={width}
+      height={height}
+      loading={priority ? 'eager' : 'lazy'}
+      decoding={priority ? 'sync' : 'async'}
+      fetchPriority={priority ? 'high' : 'auto'}
+      className={className}
+    />
+  );
+}
+```
+
+Usage:
+
+```tsx
+{/* Hero image — loads eagerly with high fetch priority */}
+<OptimisedImage
+  src="/images/hero.webp"
+  alt="Dashboard overview screenshot"
+  width={1280}
+  height={720}
+  priority
+/>
+
+{/* Body image — lazy loads off-screen */}
+<OptimisedImage
+  src="/images/feature-diagram.webp"
+  alt="Architecture diagram showing the three service layers"
+  width={800}
+  height={450}
+/>
+```
+
+## Bundle Size Monitoring
+
+Run a bundle analysis before merging any PR that adds a new dependency or significantly changes imports:
+
+```bash
+npm run build -- --analyze
+```
+
+This generates an interactive treemap at `dist/stats.html`. Open it in a browser to see which modules contribute most to each chunk. If a single dependency accounts for more than ~30 KB gzipped in a chunk it is shared across routes, consider lazy-loading it.
+
+Check the gzipped size of the main bundle in the build output:
+
+```
+dist/assets/index-Dj4k2nBx.js    182.34 kB │ gzip:  58.12 kB
+dist/assets/vendor-C8f3mKpL.js   412.10 kB │ gzip: 121.44 kB
+```
+
+The team target for the main application bundle (excluding vendor) is **< 150 kB gzipped**. Raise the threshold only after a team discussion.
+
+## Memoisation Rules
+
+React's memoisation tools — `React.memo`, `useMemo`, and `useCallback` — are optimisations, not defaults. Apply them only when all three conditions are true:
+
+1. You have used the React DevTools Profiler and identified the component or computation as a measurable bottleneck.
+2. The component renders frequently with the same props, **or** the computation is genuinely expensive (> 1 ms per call in profiling).
+3. The memoisation does not introduce a stale-closure bug or make the code meaningfully harder to follow.
+
+```tsx
+// ✅ Justified use — sortedItems is expensive and items/sortKey rarely change
+const sortedItems = useMemo(
+  () => [...items].sort((a, b) => a[sortKey].localeCompare(b[sortKey])),
+  [items, sortKey]
+);
+
+// ❌ Unjustified use — formatting a string is not expensive
+const label = useMemo(() => `Hello, ${name}`, [name]);
+```
+
+## Prefetching Strategies
+
+Prefetching reduces perceived navigation latency by loading resources before the user explicitly requests them.
+
+**Route prefetching on hover.** Use React Router's `<Link>` combined with a manual `import()` call on `onMouseEnter` to start loading a route's chunk when the user hovers a navigation link:
+
+```tsx
+function NavLink({ to, children }: { to: string; children: React.ReactNode }) {
+  function handleMouseEnter() {
+    // Prefetch the route chunk on hover — import() is idempotent
+    if (to === '/settings') import('@/pages/SettingsPage');
+    if (to === '/billing')  import('@/pages/BillingPage');
+  }
+
+  return (
+    <Link to={to} onMouseEnter={handleMouseEnter}>
+      {children}
+    </Link>
+  );
+}
+```
+
+**DNS prefetch for external origins.** If your page loads resources from a CDN or API domain, add a `<link rel="dns-prefetch">` (or `<link rel="preconnect">` for origins that serve critical resources) to the document `<head>` via the Vite HTML plugin.
+
+**Do not prefetch speculatively.** Only prefetch routes or resources the user is highly likely to navigate to. Aggressive prefetching wastes bandwidth and can trigger unnecessary API calls.

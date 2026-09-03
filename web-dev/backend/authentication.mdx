@@ -1,0 +1,212 @@
+---
+title: "Backend Authentication: JWT, API Keys, and Sessions"
+sidebarTitle: "Authentication"
+description: "How our services authenticate users and each other — JWT token lifecycle, service-to-service API keys, token validation rules, and handling auth errors correctly."
+---
+
+Authentication is one of the most security-sensitive areas of any service. We use a small, well-defined set of mechanisms across all backends so that every developer knows exactly what to expect when picking up a new service. Read this page in full before adding any auth-related code to a service.
+
+<Note>
+  Never log tokens, passwords, or any credentials — not in application logs, not in error messages, and not in Sentry/Datadog traces. If debugging requires inspecting a token, do it locally and immediately discard it. Logged credentials are treated as a security incident.
+</Note>
+
+<Tip>
+  Use the shared `@your-org/auth-middleware` package instead of writing token validation from scratch. It handles signature verification, claim checking, error responses, and clock skew for you. Add it with `npm install @your-org/auth-middleware` (Node) or `pip install your-org-auth-middleware` (Python) and follow its README for integration.
+</Tip>
+
+## User-Facing Authentication (JWT)
+
+User-facing services authenticate via **JSON Web Tokens** issued by the central auth service at `auth.your-org.internal`.
+
+**Token lifecycle:**
+
+| Token type | Lifetime | Storage |
+|------------|----------|---------|
+| Access token | 15 minutes | Memory / HTTP header |
+| Refresh token | 7 days | `HttpOnly` secure cookie |
+
+The client passes the access token on every request using the `Authorization` header:
+
+```http
+GET /api/v1/user-profiles/42 HTTP/1.1
+Authorization: Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...
+```
+
+Services **never issue tokens themselves** — all token issuance goes through the auth service. If a user's access token expires, the client calls `POST /auth/v1/token/refresh` with the refresh token cookie to get a new access token.
+
+## Service-to-Service Authentication (API Keys)
+
+Internal services that call other internal services use **shared API keys**, not JWTs. API keys are:
+
+- Generated and stored in **Vault** under `secret/services/<service-name>/api-keys`.
+- Rotated every 90 days (automated — you will receive a Slack alert when rotation is due).
+- Never hard-coded in source code or `.env.example`.
+
+Pass the API key using the `X-API-Key` header:
+
+```http
+POST /api/v1/notifications/send HTTP/1.1
+Host: notifications.your-org.internal
+X-API-Key: sk_internal_4f8a2b...
+Content-Type: application/json
+```
+
+Read the key from the environment at startup:
+
+```bash
+# .env (value injected by Vault Agent in production)
+INTERNAL_API_KEY=sk_internal_4f8a2b...
+```
+
+## Session Management
+
+Our APIs are **stateless** — there are no server-side sessions. Access tokens are short-lived and verified by each service independently using the auth service's public signing key, which is published at:
+
+```
+https://auth.your-org.internal/.well-known/jwks.json
+```
+
+Do not store session state in Redis or a database unless you have a documented reason (e.g. a real-time WebSocket service that must track connected clients). Discuss with `#backend` first.
+
+## Token Validation
+
+Every service must validate the following on every inbound JWT, in this order:
+
+1. **Signature** — verify against the JWKS endpoint public key.
+2. **Expiry (`exp`)** — reject tokens that have expired; allow up to 30 seconds of clock skew.
+3. **Issuer (`iss`)** — must equal `https://auth.your-org.internal`.
+4. **Audience (`aud`)** — must include your service's registered audience identifier (e.g. `api.your-org.com`).
+
+<Tabs>
+  <Tab title="Node.js">
+    Using `@your-org/auth-middleware` (recommended):
+
+    ```typescript
+    import { requireAuth } from '@your-org/auth-middleware';
+    import express from 'express';
+
+    const app = express();
+
+    // Apply globally — all routes below this line require a valid JWT
+    app.use(requireAuth({
+      audience: 'api.your-org.com',
+      issuer: 'https://auth.your-org.internal',
+      jwksUri: 'https://auth.your-org.internal/.well-known/jwks.json',
+    }));
+    ```
+
+    Manual validation with `jose` (if you cannot use the middleware):
+
+    ```typescript
+    import { createRemoteJWKSet, jwtVerify } from 'jose';
+
+    const JWKS = createRemoteJWKSet(
+      new URL('https://auth.your-org.internal/.well-known/jwks.json')
+    );
+
+    async function verifyToken(token: string) {
+      const { payload } = await jwtVerify(token, JWKS, {
+        issuer: 'https://auth.your-org.internal',
+        audience: 'api.your-org.com',
+        clockTolerance: 30, // seconds
+      });
+      return payload; // { sub, email, role, iat, exp, iss, aud }
+    }
+    ```
+  </Tab>
+  <Tab title="Python">
+    Using `your-org-auth-middleware` (recommended):
+
+    ```python
+    from fastapi import FastAPI
+    from your_org_auth_middleware import AuthMiddleware
+
+    app = FastAPI()
+
+    app.add_middleware(
+        AuthMiddleware,
+        audience="api.your-org.com",
+        issuer="https://auth.your-org.internal",
+        jwks_uri="https://auth.your-org.internal/.well-known/jwks.json",
+    )
+    ```
+
+    Manual validation with `python-jose` (if you cannot use the middleware):
+
+    ```python
+    import httpx
+    from jose import jwt, JWTError
+    from jose.exceptions import ExpiredSignatureError
+
+    async def get_jwks() -> dict:
+        async with httpx.AsyncClient() as client:
+            r = await client.get("https://auth.your-org.internal/.well-known/jwks.json")
+            return r.json()
+
+    async def verify_token(token: str) -> dict:
+        jwks = await get_jwks()
+        try:
+            payload = jwt.decode(
+                token,
+                jwks,
+                algorithms=["RS256"],
+                audience="api.your-org.com",
+                issuer="https://auth.your-org.internal",
+                options={"leeway": 30},  # 30s clock tolerance
+            )
+        except ExpiredSignatureError:
+            raise ValueError("Token has expired")
+        except JWTError as e:
+            raise ValueError(f"Invalid token: {e}")
+        return payload  # { sub, email, role, iat, exp, iss, aud }
+    ```
+  </Tab>
+</Tabs>
+
+## 401 vs 403 — Getting It Right
+
+These two status codes are frequently confused. Use them correctly:
+
+| Code | Meaning | When to use |
+|------|---------|-------------|
+| `401 Unauthorized` | The caller is not authenticated | No token provided, token is invalid, token has expired |
+| `403 Forbidden` | The caller is authenticated but lacks permission | Valid token, but the user's role does not allow this action |
+
+A `401` response must include a `WWW-Authenticate` header:
+
+```http
+HTTP/1.1 401 Unauthorized
+WWW-Authenticate: Bearer realm="api.your-org.com", error="invalid_token"
+Content-Type: application/json
+
+{
+  "data": null,
+  "meta": { "requestId": "req_01hx4k2p8n", "timestamp": "2024-05-14T10:23:01Z" },
+  "errors": [
+    {
+      "code": "INVALID_TOKEN",
+      "message": "The provided token is invalid or has expired.",
+      "details": null
+    }
+  ]
+}
+```
+
+A `403` response does **not** include `WWW-Authenticate` — the credentials were accepted, but the action is denied:
+
+```http
+HTTP/1.1 403 Forbidden
+Content-Type: application/json
+
+{
+  "data": null,
+  "meta": { "requestId": "req_01hx4k2p8n", "timestamp": "2024-05-14T10:23:01Z" },
+  "errors": [
+    {
+      "code": "FORBIDDEN",
+      "message": "You do not have permission to perform this action.",
+      "details": { "requiredRole": "admin", "currentRole": "viewer" }
+    }
+  ]
+}
+```

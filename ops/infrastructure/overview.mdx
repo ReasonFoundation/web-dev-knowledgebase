@@ -1,0 +1,64 @@
+---
+title: "Infrastructure Overview: Environments and Architecture"
+sidebarTitle: "Overview"
+description: "A high-level map of our AWS infrastructure: cloud regions, core components, VPC networking, DNS, and certificate management across all environments."
+---
+
+Our infrastructure runs entirely on AWS across two regions: **eu-west-1** (Ireland) serves as the primary region for all live traffic, while **us-east-1** (N. Virginia) is maintained as a disaster recovery (DR) site. Each environment — dev, staging, and production — runs in its own isolated AWS account, giving clean permission boundaries and billing separation. The sections below walk you through the major components, how they connect, and where to find deeper documentation.
+
+<Note>
+  Access the AWS console through **SSO via your corporate login** at `https://sso.company.internal`. Never use the root account for any account — root credentials are locked away and reserved for break-glass scenarios only. If you need elevated permissions, raise a request through the access-management workflow.
+</Note>
+
+## Core Components
+
+<CardGroup cols={2}>
+  <Card title="EKS Clusters" icon="server">
+    All application services run on managed Kubernetes clusters (EKS). Each environment has its own cluster. Node groups use EC2 Auto Scaling with mixed instance policies to balance cost and availability.
+  </Card>
+  <Card title="RDS PostgreSQL" icon="database">
+    Relational data is stored in Amazon RDS for PostgreSQL. Production runs Multi-AZ with automated failover. Dev and staging share a smaller single-AZ instance to reduce costs.
+  </Card>
+  <Card title="ElastiCache Redis" icon="bolt">
+    Session caching, rate-limiting counters, and job queues use ElastiCache Redis clusters. Production runs a two-node replication group; dev and staging use a single node.
+  </Card>
+  <Card title="S3 & CloudFront" icon="cloud">
+    Static assets, user uploads, and deployment artefacts are stored in S3 buckets. CloudFront sits in front of public-facing asset buckets for global CDN distribution and caching.
+  </Card>
+</CardGroup>
+
+## Regions and Disaster Recovery
+
+The primary region is **eu-west-1**. All production workloads, databases, and caches run here under normal operating conditions. The **us-east-1** DR region maintains:
+
+- Read replicas of production RDS databases (promoted manually during a failover event)
+- S3 cross-region replication for critical data buckets
+- A warm EKS cluster capable of serving traffic within 30 minutes of a declared incident
+
+Failover to DR is a **manual process** initiated by the on-call lead. Consult the runbook in the `infra-runbooks` repository before taking any action.
+
+## Networking Overview
+
+Each environment lives in its own **VPC** with non-overlapping CIDR blocks, preventing any accidental cross-environment routing. Within each VPC, subnets are divided into three tiers:
+
+| Tier | Subnet Type | What lives here |
+|---|---|---|
+| Public | Internet-facing | Application Load Balancers, NAT Gateway ENIs |
+| Private | No direct internet access | EKS worker nodes, application pods |
+| Database | Fully isolated | RDS instances, ElastiCache clusters |
+
+Security groups follow a least-privilege, service-named convention (e.g. `sg-api-service-prod`). No service exposes unnecessary ports, and all inter-service traffic stays within the private subnet tier.
+
+## DNS and Certificate Management
+
+**Route 53** manages all DNS for both public-facing domains and internal service names. Hosted zones are split by environment:
+
+- `internal.dev.company.com` — developer and preview workloads
+- `internal.staging.company.com` — staging environment
+- `company.com` — production public domain
+
+**AWS Certificate Manager (ACM)** provisions and automatically renews all TLS certificates. Do not manually manage or import certificates — ACM handles renewal 60 days before expiry. All CloudFront distributions and ALBs are associated with ACM certificates in their respective regions.
+
+<Tip>
+  For detailed architecture diagrams, network topology maps, and capacity planning notes, visit the internal **`infra-docs`** Confluence space. The space is kept in sync with major infrastructure changes and is the authoritative source for anything not covered in these runbooks.
+</Tip>

@@ -1,0 +1,212 @@
+---
+title: "Setting Up a New Backend Service: Step-by-Step Guide"
+sidebarTitle: "Setup"
+description: "Spin up a new backend service from scratch — clone the template, configure secrets, run migrations, and verify your local server is healthy."
+---
+
+Every new backend service starts from the same shared template so that project structure, linting, and CI configuration stay consistent across the team. Follow these steps any time you're bootstrapping a service, and refer back here if you get stuck mid-setup.
+
+<Note>
+  Never commit your `.env` file to version control. It is listed in `.gitignore` by default in the template, but double-check before pushing — leaked secrets are a security incident.
+</Note>
+
+<Steps>
+  <Step title="Clone the backend template">
+    Start by cloning the canonical template repository into a new local directory.
+
+    ```bash
+    git clone git@github.com:your-org/backend-template.git my-new-service
+    cd my-new-service
+
+    # Re-initialise git history so this becomes a fresh repo
+    rm -rf .git
+    git init
+    git remote add origin git@github.com:your-org/my-new-service.git
+    ```
+
+    Push the initial commit once you're ready:
+
+    ```bash
+    git add .
+    git commit -m "chore: initialise from backend-template"
+    git push -u origin main
+    ```
+  </Step>
+
+  <Step title="Install dependencies">
+    Install the runtime and development dependencies for your chosen stack.
+
+    <Tabs>
+      <Tab title="Node.js">
+        ```bash
+        # Requires Node 20+ and npm 10+
+        npm install
+        ```
+
+        Verify the installation:
+
+        ```bash
+        npm ls --depth=0
+        ```
+      </Tab>
+      <Tab title="Python">
+        ```bash
+        # Requires Python 3.11+ and Poetry 1.7+
+        poetry install
+        ```
+
+        Activate the virtual environment:
+
+        ```bash
+        poetry shell
+        ```
+
+        Verify the installation:
+
+        ```bash
+        poetry show
+        ```
+      </Tab>
+    </Tabs>
+  </Step>
+
+  <Step title="Configure environment variables">
+    Copy the example environment file and fill in the required values.
+
+    <Tabs>
+      <Tab title="Node.js">
+        ```bash
+        cp .env.example .env
+        ```
+
+        Open `.env` and set at minimum:
+
+        ```bash
+        # .env
+        NODE_ENV=development
+        DATABASE_URL=postgresql://postgres:postgres@localhost:5432/my_new_service_dev
+        JWT_SECRET=your-local-dev-secret-change-this
+        PORT=3000
+        ```
+      </Tab>
+      <Tab title="Python">
+        ```bash
+        cp .env.example .env
+        ```
+
+        Open `.env` and set at minimum:
+
+        ```bash
+        # .env
+        APP_ENV=development
+        DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/my_new_service_dev
+        SECRET_KEY=your-local-dev-secret-change-this
+        PORT=8000
+        ```
+      </Tab>
+    </Tabs>
+
+    Retrieve the real values for staging and production from Vault — ask in `#platform` if you don't have access yet.
+  </Step>
+
+  <Step title="Run database migrations">
+    Apply all pending schema migrations to your local database before starting the server.
+
+    <Tabs>
+      <Tab title="Node.js (Prisma)">
+        ```bash
+        npm run db:migrate
+        ```
+
+        This runs `prisma migrate dev` under the hood. If you see a prompt asking to name a new migration, use the format `describe_what_changed` (snake_case, no date prefix — Prisma handles timestamping).
+      </Tab>
+      <Tab title="Python (Alembic)">
+        ```bash
+        alembic upgrade head
+        ```
+
+        Check the current revision at any time with:
+
+        ```bash
+        alembic current
+        ```
+
+        And view pending migrations with:
+
+        ```bash
+        alembic history --indicate-current
+        ```
+      </Tab>
+    </Tabs>
+  </Step>
+
+  <Step title="Start the local development server">
+    Launch the server in watch mode so it reloads automatically when you save changes.
+
+    <Tabs>
+      <Tab title="Node.js">
+        ```bash
+        npm run dev
+        ```
+
+        The server starts at **http://localhost:3000**. You should see output similar to:
+
+        ```
+        [server] Listening on http://localhost:3000
+        [db]     Connected to postgresql://localhost:5432/my_new_service_dev
+        ```
+      </Tab>
+      <Tab title="Python">
+        ```bash
+        uvicorn main:app --reload --port 8000
+        ```
+
+        The server starts at **http://localhost:8000**. You should see output similar to:
+
+        ```
+        INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+        INFO:     Started reloader process using WatchFiles
+        ```
+      </Tab>
+    </Tabs>
+  </Step>
+
+  <Step title="Confirm the health endpoint responds">
+    Every service exposes a `/health` endpoint that returns a `200 OK` when the service and its dependencies are ready.
+
+    <Tabs>
+      <Tab title="Node.js">
+        ```bash
+        curl -s localhost:3000/health | jq
+        ```
+
+        Expected response:
+
+        ```json
+        {
+          "status": "ok",
+          "version": "1.0.0",
+          "db": "connected"
+        }
+        ```
+      </Tab>
+      <Tab title="Python">
+        ```bash
+        curl -s localhost:8000/health | jq
+        ```
+
+        Expected response:
+
+        ```json
+        {
+          "status": "ok",
+          "version": "1.0.0",
+          "db": "connected"
+        }
+        ```
+      </Tab>
+    </Tabs>
+
+    If the health check fails, inspect the server logs first. Common causes are a missing `DATABASE_URL` or the database container not running — start it with `docker compose up -d db` if needed.
+  </Step>
+</Steps>

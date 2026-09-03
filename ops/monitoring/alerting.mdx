@@ -1,0 +1,132 @@
+---
+title: "Alert Configuration: Thresholds, Routing, and Escalation"
+sidebarTitle: "Alerting"
+description: "How production alerts are defined, routed, and escalated — including standard thresholds, PagerDuty policies, creating new alerts, and managing maintenance windows."
+---
+
+Alerts are the bridge between your observability data and the humans who need to act on it. A well-tuned alert fires only when a real problem needs attention, routes to the right person immediately, and includes enough context to start the investigation without opening five browser tabs. This page explains how alerts are structured in our stack, how to create new ones, and how to manage them responsibly.
+
+## Tooling
+
+- **PagerDuty** handles all actionable, on-call alerts. It manages escalation policies, on-call rotations, and incident lifecycle.
+- **Slack** receives informational and warning-level alerts that do not require immediate human action. These post to the service team's channel (e.g., `#alerts-api-gateway`).
+
+## Standard Alert Thresholds
+
+The following thresholds are applied to all production services. They are defined in the `monitoring-as-code` Terraform repository and apply automatically when you provision a new service.
+
+| Signal | Threshold | Severity | Route |
+|---|---|---|---|
+| Error rate | > 1% for 5 min | P2 | PagerDuty |
+| Error rate | > 5% for 2 min | P1 | PagerDuty (immediate) |
+| p99 latency | > 1 s for 5 min | P2 | PagerDuty |
+| p99 latency | > 2 s for 2 min | P1 | PagerDuty (immediate) |
+| Pod restarts | > 3 in 5 min | P2 | PagerDuty |
+| SLO error budget | < 20% remaining | Warning | Slack |
+| SLO error budget | < 5% remaining | P2 | PagerDuty |
+
+## Escalation Policy
+
+PagerDuty escalation follows a three-level chain. Notifications go to the next level automatically if the current level does not acknowledge within the timeout.
+
+| Level | Who | Timeout |
+|---|---|---|
+| L1 | On-call engineer (weekly rotation) | 5 minutes |
+| L2 | Team lead | 10 minutes |
+| L3 | Engineering manager | 15 minutes |
+
+If you are on L1 and receive a page, acknowledge it immediately even if you are still investigating. Acknowledgement stops the escalation clock — it does not mean you have resolved the issue.
+
+## Creating New Alerts
+
+All alert changes go through code review. Open a pull request against the `monitoring-as-code` repository with a Terraform Datadog monitor definition. This ensures alerts are reviewed, version-controlled, and reproducible.
+
+<Tabs>
+  <Tab title="Terraform (Preferred)">
+    Add a `datadog_monitor` resource in `monitoring-as-code/services/<service-name>/monitors.tf`:
+
+    ```hcl
+    resource "datadog_monitor" "api_gateway_error_rate" {
+      name    = "api-gateway — error rate elevated"
+      type    = "metric alert"
+      message = <<-EOT
+        Error rate for api-gateway has exceeded {{threshold}}%.
+        Runbook: https://kb.internal.example.com/ops/deployment/rollback-procedures
+        @pagerduty-api-gateway
+      EOT
+
+      query = "sum(last_5m):sum:trace.web.request.errors{service:api-gateway,env:production}.as_rate() / sum:trace.web.request.hits{service:api-gateway,env:production}.as_rate() * 100 > 1"
+
+      monitor_thresholds {
+        critical          = 5
+        critical_recovery = 2
+        warning           = 1
+        warning_recovery  = 0.5
+      }
+
+      notify_no_data    = false
+      renotify_interval = 30
+      timeout_h         = 0
+
+      tags = ["service:api-gateway", "env:production", "managed-by:terraform"]
+    }
+    ```
+
+    Run `terraform plan` in the `monitoring-as-code` directory to preview changes before merging. CI will run `terraform validate` and `tflint` on every PR automatically.
+  </Tab>
+  <Tab title="Datadog UI (Ad-hoc / Testing)">
+    Use the Datadog UI to prototype an alert before committing it to Terraform. Navigate to **Monitors → New Monitor → Metric**, then:
+
+    1. Set the metric query — e.g., `avg:trace.web.request.errors{service:api-gateway,env:production}`.
+    2. Set the evaluation window and threshold values.
+    3. In the notification message, include the runbook URL and the appropriate PagerDuty or Slack handle.
+    4. Save the monitor with a `managed-by:manual` tag.
+
+    **Important:** manual monitors must be exported to Terraform within one sprint. Any monitor tagged `managed-by:manual` for more than two weeks will be flagged in the monthly alert review and may be deleted.
+
+    Example notification message to use as a starting point:
+
+    ```
+    {{#is_alert}}
+    🔴 *{{monitor.name}}* is firing on {{service.name}} ({{env.name}}).
+    Value: {{value}} | Threshold: {{threshold}}
+
+    Runbook: https://kb.internal.example.com/ops/deployment/rollback-procedures
+    Dashboard: https://app.datadoghq.com/dashboard/your-service-dashboard
+    {{/is_alert}}
+
+    {{#is_recovery}}
+    ✅ *{{monitor.name}}* has recovered.
+    {{/is_recovery}}
+
+    @pagerduty-api-gateway
+    ```
+  </Tab>
+</Tabs>
+
+## Muting Alerts During Maintenance
+
+Use a **PagerDuty Maintenance Window** any time you are performing planned work that will trigger alerts. This prevents noise and false pages from reaching the on-call engineer.
+
+1. Open PagerDuty → **Maintenance Windows → New Maintenance Window**.
+2. Select the services affected.
+3. Set the start and end time — keep windows as short as possible.
+4. Add a description that links to the change ticket or PR.
+5. Notify `#on-call` that a maintenance window is active.
+
+Maintenance windows should be created **before** work begins, not after an alert fires.
+
+<Warning>
+  Never disable or delete a production alert outside of a PagerDuty maintenance window. Disabling an alert directly in Datadog removes the audit trail, leaves no expiry time, and puts services in a silent failure state. If you find yourself wanting to disable an alert permanently because it is too noisy, tune the threshold or evaluation window instead — or bring it to the monthly alert review for discussion.
+</Warning>
+
+## Alert Fatigue and Monthly Tuning
+
+Alert quality degrades over time if monitors are never reviewed. On the first Monday of each month, the on-call rotation lead runs the **alert review**:
+
+- Pull the previous month's alert history from PagerDuty.
+- Identify any monitor that fired more than 20 times without resulting in an incident action.
+- Propose a threshold adjustment or removal in the `monitoring-as-code` repo.
+- Review all `managed-by:manual` monitors and migrate them to Terraform or delete them.
+
+If you find yourself silencing the same alert repeatedly, treat it as a bug — open a PR to fix the threshold rather than ignoring it.

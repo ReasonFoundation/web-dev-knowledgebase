@@ -1,0 +1,126 @@
+---
+title: "Environments: Dev, Staging, and Production Differences"
+sidebarTitle: "Environments"
+description: "Reference guide for our three AWS environments — what each is for, how deploys are triggered, and how to access them safely for debugging and testing."
+---
+
+We operate three environments — **dev**, **staging**, and **production** — each in its own AWS account. Keeping accounts separate means a misconfigured IAM policy or runaway cost spike in dev can never touch production. This page covers what each environment is for, how configuration is managed, how code moves between them, and the safe ways to access each one for debugging.
+
+<Warning>
+  **Never run destructive operations in production.** This includes, but is not limited to: manual database mutations, force-deleting Kubernetes workloads, purging caches without a rollback plan, or running migration scripts outside of the standard deploy pipeline. If you need to test a potentially destructive change, use staging — it is purpose-built for that.
+</Warning>
+
+## Environment Reference
+
+| Property | Dev | Staging | Production |
+|---|---|---|---|
+| **Purpose** | Feature development, integration testing | Pre-release validation, QA sign-off | Live customer traffic |
+| **AWS Account** | `123456789010` (dev) | `123456789011` (staging) | `123456789012` (prod) |
+| **Deploy Trigger** | Automatic on PR branch push | Automatic on merge to `main` | Manual release via pipeline |
+| **Database** | Shared RDS instance (multi-tenant) | Shared RDS instance (multi-tenant) | Dedicated Multi-AZ RDS cluster |
+| **Cache** | Single-node ElastiCache | Single-node ElastiCache | Two-node replication group |
+| **Access** | All engineers | All engineers | Restricted — on-call + senior team |
+| **URL Pattern** | `*.dev.company.internal` | `*.staging.company.internal` | `*.company.com` |
+
+## Promoting Between Environments
+
+Code moves through environments in a single direction: **dev → staging → production**. Each transition has a different trigger and review gate.
+
+<Steps>
+  <Step title="Dev: automatic on branch push">
+    Every push to a feature branch triggers a build and deploys a preview environment at `<branch-name>.dev.company.internal`. These environments are ephemeral and are torn down automatically 72 hours after the last commit, or when the PR is closed.
+  </Step>
+  <Step title="Staging: automatic on merge to main">
+    When a pull request merges into `main`, the CI pipeline automatically builds and deploys the new image to staging. The staging deploy completes within roughly 5 minutes. Monitor it in the `#deployments` Slack channel.
+  </Step>
+  <Step title="Production: manual release">
+    Deploying to production requires a manual trigger. Open the **Releases** workflow in GitHub Actions, select the staging-validated image tag you want to ship, and approve the deployment. A second team member must approve before the pipeline proceeds. Coordinate in `#releases` before triggering.
+  </Step>
+</Steps>
+
+## Environment Configuration
+
+All environment-specific configuration — database connection strings, API keys, feature flags, third-party credentials — is stored in **AWS SSM Parameter Store** under a structured hierarchy:
+
+```
+/<environment>/<service>/<variable>
+# Examples:
+/production/api-service/DATABASE_URL
+/staging/worker-service/REDIS_URL
+/dev/api-service/STRIPE_SECRET_KEY
+```
+
+**Do not store secrets in `.env` files inside repositories.** Even `.env.example` files must contain only placeholder values, never real credentials. Applications read their config at startup via the SSM SDK or via environment variables injected by the EKS pod spec. If you need to add a new config value, follow the [SSM parameter guide](/ops/infrastructure/environments) and update the relevant pod spec.
+
+## Accessing Environments for Debugging
+
+<Tabs>
+  <Tab title="Dev">
+    Dev environments are accessible directly from the corporate network or via the standard developer VPN profile (`vpn-dev`). You can connect to the shared dev database using your personal read-write credentials provisioned during onboarding:
+
+    ```bash
+    # Connect to dev RDS via psql
+    psql "host=rds.dev.company.internal \
+          dbname=appdb \
+          user=<your-dev-username> \
+          sslmode=require"
+    ```
+
+    Kubernetes access to the dev cluster:
+
+    ```bash
+    # Authenticate and set context
+    aws sso login --profile dev
+    aws eks update-kubeconfig \
+      --region eu-west-1 \
+      --name eks-dev \
+      --profile dev
+    kubectl config use-context eks-dev
+    ```
+  </Tab>
+  <Tab title="Staging">
+    Staging requires the **`vpn-staging`** VPN profile. Direct developer access to the staging cluster is **read-only** by default. Database access is available only through the bastion host, and is also read-only:
+
+    ```bash
+    # Connect to the staging bastion (requires VPN active)
+    ssh -i ~/.ssh/id_ed25519 bastion-user@bastion.staging.company.internal
+
+    # From the bastion, connect to the staging DB (read-only role)
+    psql "host=rds.staging.company.internal \
+          dbname=appdb \
+          user=readonly_staging \
+          sslmode=require"
+    ```
+
+    Kubernetes access to the staging cluster:
+
+    ```bash
+    aws sso login --profile staging
+    aws eks update-kubeconfig \
+      --region eu-west-1 \
+      --name eks-staging \
+      --profile staging
+    kubectl config use-context eks-staging
+    # You will have read-only RBAC permissions by default
+    ```
+  </Tab>
+  <Tab title="Production">
+    Production access is restricted to the on-call engineer and senior infrastructure team members. **You should not need direct production access for routine debugging.** If you believe you need access for an active incident, contact the on-call lead via PagerDuty.
+
+    If access is granted during an incident:
+
+    ```bash
+    # Production VPN profile: vpn-prod (requires MFA token)
+    # Bastion is the only route to production RDS
+    ssh -i ~/.ssh/id_ed25519 bastion-user@bastion.prod.company.internal
+
+    # Read-only DB access only — no writes via bastion
+    psql "host=rds.prod.company.internal \
+          dbname=appdb \
+          user=readonly_prod \
+          sslmode=require"
+    ```
+
+    All production bastion sessions are logged and audited.
+  </Tab>
+</Tabs>

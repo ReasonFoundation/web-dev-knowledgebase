@@ -1,0 +1,205 @@
+---
+title: "REST API Design Guidelines and Naming Conventions"
+sidebarTitle: "API Guidelines"
+description: "Standards for designing consistent, predictable REST APIs — covering resource naming, HTTP semantics, versioning, response envelopes, and error handling."
+---
+
+Consistency across our APIs reduces the cognitive overhead of switching between services and makes it easier to build shared tooling like SDK generators, API gateways, and monitoring dashboards. Apply these guidelines to every internal and external API endpoint you create or modify.
+
+## Resource Naming
+
+Name resources using **plural nouns** in **kebab-case**. Resources should represent things, not actions — verbs belong in the HTTP method, not the URL path.
+
+```
+# ✅ Correct
+GET  /api/v1/user-profiles
+GET  /api/v1/user-profiles/42
+POST /api/v1/blog-posts
+GET  /api/v1/blog-posts/99/comments
+
+# ❌ Avoid
+GET  /api/v1/getUser
+GET  /api/v1/UserProfile
+POST /api/v1/createBlogPost
+```
+
+Nest resources only one level deep. If you need to filter by a parent, use query parameters beyond that:
+
+```
+# One level of nesting — fine
+GET /api/v1/orders/55/items
+
+# Deeper nesting — use query params instead
+GET /api/v1/comments?orderId=55&itemId=12
+```
+
+## HTTP Method Semantics
+
+Use HTTP methods according to their standard semantics. If an endpoint does not fit neatly into these definitions, discuss it in `#backend` before shipping.
+
+| Method | Use for | Idempotent? | Request body? |
+|--------|---------|-------------|---------------|
+| `GET` | Retrieve a resource or collection | ✅ | ❌ |
+| `POST` | Create a new resource | ❌ | ✅ |
+| `PUT` | Replace a resource entirely | ✅ | ✅ |
+| `PATCH` | Partially update a resource | ❌ | ✅ |
+| `DELETE` | Remove a resource | ✅ | Optional |
+
+## Versioning
+
+All routes must be prefixed with a version segment (`/v1/`, `/v2/`, etc.). Never remove or change the behaviour of an existing versioned route — introduce a new version instead.
+
+```
+https://api.your-org.com/v1/user-profiles
+https://api.your-org.com/v2/user-profiles   ← breaking change goes here
+```
+
+Increment the major version only for **breaking changes** (removed fields, changed types, altered behaviour). Non-breaking additions (new optional fields, new endpoints) can ship within the same version.
+
+## Response Envelope
+
+Wrap every response in a consistent envelope so clients can handle all responses with the same parsing logic.
+
+```json
+{
+  "data": { ... },
+  "meta": {
+    "requestId": "req_01hx4k2p8n",
+    "timestamp": "2024-05-14T10:23:01Z"
+  },
+  "errors": null
+}
+```
+
+For collection responses, include pagination metadata inside `meta`:
+
+```json
+{
+  "data": [
+    { "id": 1, "name": "Alice" },
+    { "id": 2, "name": "Bob" }
+  ],
+  "meta": {
+    "requestId": "req_01hx4k2p8n",
+    "timestamp": "2024-05-14T10:23:01Z",
+    "pagination": {
+      "nextCursor": "dXNlcl8yOA==",
+      "limit": 20,
+      "hasMore": true
+    }
+  },
+  "errors": null
+}
+```
+
+On success, `errors` is `null`. On error, `data` is `null`.
+
+## Pagination
+
+Use **cursor-based pagination** for all collection endpoints. Offset-based pagination causes inconsistent results on frequently updated datasets.
+
+```
+# Request
+GET /api/v1/user-profiles?limit=20&cursor=dXNlcl8yOA==
+
+# Response meta.pagination
+{
+  "nextCursor": "dXNlcl80Ng==",
+  "limit": 20,
+  "hasMore": true
+}
+```
+
+- `cursor` is an opaque, base64-encoded pointer (typically the last record's ID or a composite sort key).
+- `limit` defaults to `20`, maximum `100`. Reject requests above `100` with a `400`.
+- When `hasMore` is `false`, omit `nextCursor` or set it to `null`.
+
+## Error Response Schema
+
+Return errors in this structure regardless of status code:
+
+```json
+{
+  "data": null,
+  "meta": {
+    "requestId": "req_01hx4k2p8n",
+    "timestamp": "2024-05-14T10:23:01Z"
+  },
+  "errors": [
+    {
+      "code": "VALIDATION_ERROR",
+      "message": "The 'email' field must be a valid email address.",
+      "details": {
+        "field": "email",
+        "received": "not-an-email"
+      }
+    }
+  ]
+}
+```
+
+- `code` is a machine-readable, SCREAMING_SNAKE_CASE string that clients can switch on.
+- `message` is a human-readable string safe to display in logs (never include PII or credentials).
+- `details` is an optional object with structured context for the specific error.
+
+## Status Code Reference
+
+<Accordion title="2xx — Success">
+  | Code | When to use |
+  |------|-------------|
+  | `200 OK` | Successful `GET`, `PUT`, `PATCH`, or `DELETE` with a response body |
+  | `201 Created` | Successful `POST` that created a resource; include a `Location` header pointing to the new resource |
+  | `204 No Content` | Successful `DELETE` (or any operation) where there is nothing meaningful to return |
+</Accordion>
+
+<Accordion title="4xx — Client Errors">
+  | Code | When to use |
+  |------|-------------|
+  | `400 Bad Request` | Malformed request syntax, invalid query parameters, or missing required fields |
+  | `401 Unauthorized` | No credentials provided, or credentials are invalid / expired |
+  | `403 Forbidden` | Credentials are valid but the caller lacks permission for this resource |
+  | `404 Not Found` | The requested resource does not exist (or you're hiding its existence from an unauthorised caller) |
+  | `422 Unprocessable Entity` | The request is well-formed but fails business validation (e.g. email already taken) |
+</Accordion>
+
+<Accordion title="5xx — Server Errors">
+  | Code | When to use |
+  |------|-------------|
+  | `500 Internal Server Error` | An unexpected error occurred; always log the full stack trace server-side and return a generic `code: INTERNAL_ERROR` to the client — never expose stack traces in the response body |
+</Accordion>
+
+## Full Request / Response Example
+
+```http
+POST /api/v1/user-profiles HTTP/1.1
+Host: api.your-org.com
+Authorization: Bearer eyJhbGci...
+Content-Type: application/json
+
+{
+  "name": "Alice Example",
+  "email": "alice@example.com",
+  "role": "editor"
+}
+```
+
+```http
+HTTP/1.1 201 Created
+Content-Type: application/json
+Location: /api/v1/user-profiles/42
+
+{
+  "data": {
+    "id": 42,
+    "name": "Alice Example",
+    "email": "alice@example.com",
+    "role": "editor",
+    "createdAt": "2024-05-14T10:23:01Z"
+  },
+  "meta": {
+    "requestId": "req_01hx4k2p8n",
+    "timestamp": "2024-05-14T10:23:01Z"
+  },
+  "errors": null
+}
+```

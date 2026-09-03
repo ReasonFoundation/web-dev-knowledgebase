@@ -1,0 +1,145 @@
+---
+title: "Networking: VPC Layout, DNS, and Internal Service Routing"
+sidebarTitle: "Networking"
+description: "How our VPCs are structured, how services discover and talk to each other, security group conventions, load balancer types, and allowed port ranges."
+---
+
+Every environment in our AWS estate has its own VPC with a non-overlapping CIDR block, a consistent three-tier subnet layout, and a strict security group model. Understanding this topology is essential for diagnosing connectivity issues, requesting firewall rule changes, and ensuring new services integrate cleanly with the rest of the platform. This page covers VPC addressing, subnet tiers, service discovery within Kubernetes, and the difference between internal and external load balancers.
+
+<Note>
+  To request a firewall rule change — whether opening a new port between security groups, adding an egress rule, or modifying a network ACL — open a ticket in the **infra queue** in Jira using the `INFRA-FIREWALL` template. Do not manually modify security groups in the AWS console without an approved ticket; all security group state is managed by Terraform and manual changes will be overwritten on the next apply.
+</Note>
+
+## VPC CIDR Blocks
+
+Each environment is assigned a `/16` block, with subnets carved out of it per availability zone and tier. We use three AZs in eu-west-1 for production, and two AZs for dev and staging.
+
+| Environment | VPC CIDR | AZs |
+|---|---|---|
+| Dev | `10.0.0.0/16` | `eu-west-1a`, `eu-west-1b` |
+| Staging | `10.1.0.0/16` | `eu-west-1a`, `eu-west-1b` |
+| Production | `10.2.0.0/16` | `eu-west-1a`, `eu-west-1b`, `eu-west-1c` |
+| DR (us-east-1) | `10.3.0.0/16` | `us-east-1a`, `us-east-1b`, `us-east-1c` |
+
+## Subnet Layout
+
+Each VPC is divided into three subnet tiers. Subnets in the same tier are replicated across all AZs for the environment, giving high availability within each layer.
+
+| Tier | CIDR Range (prod example) | Routing | Purpose |
+|---|---|---|---|
+| **Public** | `10.2.0.0/20` per AZ | Internet Gateway | External ALBs, NAT Gateway ENIs |
+| **Private** | `10.2.16.0/20` per AZ | NAT Gateway | EKS worker nodes, application pods |
+| **Database** | `10.2.32.0/24` per AZ | None (isolated) | RDS, ElastiCache — no internet access |
+
+Private subnet resources reach the internet through **NAT Gateways** deployed in the public subnets — one NAT Gateway per AZ to prevent cross-AZ traffic during an AZ failure. Database-tier subnets have no route to the internet at all; they are only reachable from private subnets via security group rules.
+
+## Security Group Conventions
+
+Security groups follow a **least-privilege, named-by-service** convention. Names use the format `sg-<service>-<environment>`, for example:
+
+- `sg-api-service-prod`
+- `sg-worker-service-staging`
+- `sg-rds-prod`
+- `sg-elasticache-prod`
+- `sg-alb-public-prod`
+
+Rules are source-referenced to other named security groups, not to CIDR blocks, wherever possible. For example, the RDS security group allows inbound TCP 5432 **from `sg-api-service-prod`** rather than from `10.2.0.0/16`. This keeps rules tight and makes audit straightforward.
+
+## Allowed Port Ranges
+
+| Traffic Type | Ports | Source |
+|---|---|---|
+| Public HTTPS | `443` | `0.0.0.0/0` (via ALB only) |
+| Public HTTP (redirect) | `80` | `0.0.0.0/0` (via ALB only) |
+| Internal service traffic | `3000–9000` | Private subnet security groups |
+| PostgreSQL | `5432` | Named application security groups |
+| Redis | `6379` | Named application security groups |
+| SSH (bastion only) | `22` | VPN CIDR range only |
+
+No service exposes ports outside these ranges. If a new service needs a non-standard port, request an exception via the infra queue.
+
+## Service Discovery within Kubernetes
+
+Services within the EKS cluster resolve each other using **Kubernetes DNS**, provided by CoreDNS. The standard address format is:
+
+```
+<service-name>.<namespace>.svc.cluster.local
+```
+
+For example, to reach the `payments` service in the `backend` namespace from any pod in the cluster:
+
+```
+payments.backend.svc.cluster.local
+```
+
+Within the same namespace, the short form `<service-name>` also resolves. Cross-namespace calls should always use the full FQDN to be explicit and avoid accidental resolution against the wrong namespace.
+
+You can verify DNS resolution from inside a running pod using:
+
+```bash
+kubectl run dns-debug --image=busybox:1.36 --rm -it --restart=Never -- \
+  nslookup payments.backend.svc.cluster.local
+```
+
+## Load Balancer Types
+
+We use two types of load balancer, each for a different traffic path:
+
+<Accordion title="Application Load Balancer (ALB) — public-facing traffic">
+  External ALBs handle all traffic entering from the internet. They sit in the public subnets, terminate TLS using ACM certificates, and forward requests to pods in the private subnets via target groups. Host-based and path-based routing rules direct traffic to the correct Kubernetes service.
+
+  ALBs are provisioned automatically by the **AWS Load Balancer Controller** when you annotate a Kubernetes `Ingress` resource:
+
+  ```yaml
+  apiVersion: networking.k8s.io/v1
+  kind: Ingress
+  metadata:
+    name: api-ingress
+    namespace: backend
+    annotations:
+      kubernetes.io/ingress.class: alb
+      alb.ingress.kubernetes.io/scheme: internet-facing
+      alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:eu-west-1:123456789012:certificate/abc123
+  spec:
+    rules:
+      - host: api.company.com
+        http:
+          paths:
+            - path: /
+              pathType: Prefix
+              backend:
+                service:
+                  name: api-service
+                  port:
+                    number: 8080
+  ```
+</Accordion>
+
+<Accordion title="Network Load Balancer (NLB) — internal service-to-service traffic">
+  When a service outside the cluster (e.g. a Lambda function, an external worker, or an on-premises integration) needs to call a service inside the cluster, we use an **internal NLB** in the private subnets. NLBs provide a stable DNS name and support TCP passthrough for low-latency, high-throughput paths.
+
+  Internal NLBs are provisioned via the same AWS Load Balancer Controller with a different annotation set:
+
+  ```yaml
+  annotations:
+    kubernetes.io/ingress.class: alb
+    alb.ingress.kubernetes.io/scheme: internal
+  ```
+
+  Pod-to-pod traffic within the cluster does **not** use NLBs — use Kubernetes DNS instead.
+</Accordion>
+
+## Internal Service Endpoints
+
+The following table lists stable internal endpoints for platform-level services. These are resolvable from any pod in any namespace within the cluster, and from any resource in the private subnets via the internal NLBs where noted.
+
+| Service | Internal Endpoint | Port | Protocol |
+|---|---|---|---|
+| API Service | `api-service.backend.svc.cluster.local` | `8080` | HTTP |
+| Worker Service | `worker-service.backend.svc.cluster.local` | `8081` | HTTP |
+| Auth Service | `auth-service.auth.svc.cluster.local` | `9000` | HTTP |
+| Payments Service | `payments.backend.svc.cluster.local` | `3001` | HTTP |
+| Notification Service | `notifications.backend.svc.cluster.local` | `3002` | HTTP |
+| PostgreSQL (RDS) | `rds.<env>.company.internal` | `5432` | TCP |
+| Redis (ElastiCache) | `redis.<env>.company.internal` | `6379` | TCP |
+| Internal ALB | `internal-alb.<env>.company.internal` | `443` | HTTPS |

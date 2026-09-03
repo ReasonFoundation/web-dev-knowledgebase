@@ -1,13 +1,11 @@
 {
-  "$schema": "https://mintlify.com/docs.json",
-  "name": "Web Dev & Ops Knowledgebase",
+  "projectType": "general",
+  "projectName": "Web Dev & Ops Knowledgebase",
+  "projectDescription": "An internal knowledgebase for web development and operations teams, covering standards, runbooks, guides, and tooling references.",
   "theme": "maple",
-  "colors": {
-    "primary": "#ef7025",
-    "light": "#eec9bc",
-    "dark": "#4fa1ab"
-  },
-  "favicon": "/favicon.svg",
+  "primaryColor": "#ef7025",
+  "lightColor": "#eec9bc",
+  "darkColor": "#4fa1ab",
   "navigation": {
     "tabs": [
       {
@@ -96,5 +94,16 @@
         ]
       }
     ]
-  }
+  },
+  "keyFeatures": [
+    "Web development standards and coding conventions",
+    "Frontend and backend setup guides",
+    "Testing and code review best practices",
+    "Git branching strategy and commit conventions",
+    "Infrastructure and environment documentation",
+    "CI/CD pipeline and deployment procedures",
+    "Monitoring, alerting, and logging references",
+    "Incident response and on-call runbooks"
+  ],
+  "publicApiSurface": []
 }

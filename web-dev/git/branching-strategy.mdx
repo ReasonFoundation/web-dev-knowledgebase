@@ -1,0 +1,131 @@
+---
+title: "Git Branching Strategy: Trunk-Based Development Guide"
+sidebarTitle: "Branching Strategy"
+description: "Learn how our team structures Git branches using trunk-based development — including naming conventions, branch lifetimes, rebase cadence, and merge rules."
+---
+
+Our branching model is built around trunk-based development. All work flows back to `main` quickly, through short-lived branches that stay close to the trunk. This keeps integration pain low, surfaces conflicts early, and lets CI give you fast, meaningful feedback on real code — not a diverged snapshot from three days ago.
+
+## Branch Types
+
+We use four branch types, each with a strict naming convention and purpose.
+
+| Branch | Pattern | Purpose |
+|---|---|---|
+| Trunk | `main` | Production-ready code at all times |
+| Feature | `feature/TICKET-123-short-description` | New features and non-emergency changes |
+| Hotfix | `hotfix/TICKET-456-short-description` | Emergency fixes to production |
+| Release | `release/v1.2.0` | Stabilisation window before a versioned deploy |
+
+## Branch Flow Diagram
+
+The diagram below shows how branches originate from and return to `main`.
+
+```
+main ──────●──────────────────────────────●──────●──────────────────▶
+           │                              ↑      ↑
+           │  feature/TICKET-123-login    │      │
+           └──●──●──●─────────────────────┘      │
+                                                  │
+           │  hotfix/TICKET-456-csrf-fix          │
+           └──────────────────────●───────────────┘
+
+           release/v1.2.0
+           ┌──────────────────────────────────────●──▶ tag v1.2.0
+           │ (branched from main pre-deploy)
+```
+
+Feature branches open off `main` and merge back into `main` via pull request. Hotfix branches follow the same path but are prioritised for immediate review. Release branches are created from `main` immediately before a scheduled deploy and receive only bug-fix commits; once the deploy is confirmed stable they are tagged and left read-only.
+
+## Feature Branches
+
+Create a feature branch for every piece of work tracked by a ticket.
+
+```bash
+# Always branch from an up-to-date main
+git switch main
+git pull --ff-only
+
+git switch -c feature/TICKET-123-user-profile-avatar
+```
+
+Keep the slug short — two to five words after the ticket number is enough. Avoid stuffing the full ticket title into the branch name.
+
+<Warning>
+**Long-lived branches cause merge hell.** A feature branch that lives longer than two days almost always results in painful merge conflicts, stale assumptions, and CI failures that are hard to attribute. If your branch is growing beyond two days, split the work into smaller chunks and merge incrementally. Trunk-based development only works when branches stay close to `main`.
+</Warning>
+
+### Branch Lifetime Rules
+
+- Feature branches **must** merge within **2 days** of opening.
+- If a feature takes longer, break it into smaller, independently-mergeable slices — use feature flags to ship incomplete work safely.
+- Delete the branch immediately after merge (GitHub will do this automatically if you enable the setting in repo settings → General).
+
+## Keeping Branches Up to Date
+
+Rebase your feature branch onto `main` at least once a day while it is open.
+
+```bash
+# Fetch latest changes and rebase your branch on top
+git fetch origin
+git rebase origin/main
+
+# If conflicts arise, resolve them, then continue
+git add <resolved-file>
+git rebase --continue
+```
+
+Rebase — not merge — keeps history linear and makes the eventual squash merge onto `main` clean. Never merge `main` into your feature branch; always rebase.
+
+## Hotfix Branches
+
+Branch directly from `main`, fix the issue, open a PR, and get it merged as fast as possible.
+
+```bash
+git switch main
+git pull --ff-only
+git switch -c hotfix/TICKET-456-csrf-token-missing
+```
+
+A hotfix branch follows the same PR and CI requirements as a feature branch. Speed is not an excuse to skip review.
+
+## Release Branches
+
+Release branches are created by the release manager immediately before a scheduled production deploy.
+
+```bash
+git switch main
+git pull --ff-only
+git switch -c release/v1.2.0
+git push -u origin release/v1.2.0
+```
+
+Only bug fixes discovered during the stabilisation window are committed to a release branch. After a successful deploy, tag the branch tip and leave it untouched.
+
+```bash
+git tag -a v1.2.0 -m "Release v1.2.0"
+git push origin v1.2.0
+```
+
+## Protected Branches
+
+<Note>
+`main` and all branches matching `release/*` are protected. Every merge requires an approved pull request with all CI checks passing. Direct pushes to these branches are blocked for everyone, including repository admins. Configure this in **Settings → Branches → Branch protection rules**.
+</Note>
+
+## Deleting Branches After Merge
+
+Enable automatic branch deletion in GitHub (Settings → General → Automatically delete head branches). For branches that slip through, clean up manually:
+
+```bash
+# Delete the remote branch
+git push origin --delete feature/TICKET-123-user-profile-avatar
+
+# Delete the local branch
+git branch -d feature/TICKET-123-user-profile-avatar
+
+# Prune stale remote-tracking refs
+git fetch --prune
+```
+
+Keeping the remote tidy prevents the branch list from becoming noise that obscures active work.

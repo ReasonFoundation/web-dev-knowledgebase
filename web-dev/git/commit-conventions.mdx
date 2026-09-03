@@ -1,0 +1,178 @@
+---
+title: "Commit Message Conventions: Conventional Commits Guide"
+sidebarTitle: "Commit Conventions"
+description: "How to write clear, parseable commit messages using the Conventional Commits spec — covering types, scopes, body, footers, and breaking change notation."
+---
+
+Every commit message in this repository follows the [Conventional Commits](https://www.conventionalcommits.org/) specification. Consistent commit messages make the history scannable, enable automated changelog generation, and give reviewers and future engineers an honest record of why code changed — not just what changed.
+
+<Note>
+The CI pipeline parses every commit message on merge to `main` using `conventional-changelog`. A malformed commit message will not break the build, but it **will** be silently omitted from the auto-generated changelog and release notes. Keep your messages well-formed so your work shows up.
+</Note>
+
+## The Format
+
+Every commit message follows this three-part structure:
+
+```
+<type>(<scope>): <description>
+
+[optional body]
+
+[optional footer(s)]
+```
+
+The first line is the **subject**. It is the only required part. The body and footer are optional but strongly encouraged for anything non-trivial.
+
+## Types
+
+Use one of the following types. Do not invent new ones.
+
+| Type | When to use |
+|---|---|
+| `feat` | A new feature visible to the user or consumer |
+| `fix` | A bug fix |
+| `docs` | Documentation changes only |
+| `style` | Formatting, whitespace — no logic change |
+| `refactor` | Code restructure with no behaviour change |
+| `test` | Adding or correcting tests |
+| `chore` | Build process, dependency updates, tooling |
+| `ci` | Changes to CI/CD configuration files and scripts |
+| `perf` | A change that improves performance |
+
+## Scope
+
+The scope is **optional** but recommended. It names the module, package, or area of the codebase the commit touches. Write it in lowercase, using hyphens for multi-word scopes.
+
+```
+feat(auth): add OAuth2 login flow
+fix(checkout): correct VAT rounding on Irish orders
+chore(deps): bump eslint from 8.52.0 to 8.57.0
+```
+
+If a commit spans too many areas to name a single scope, omit the scope rather than writing something vague like `(misc)` or `(various)`.
+
+## Description Rules
+
+The description — the text after the colon — must:
+
+- Use the **imperative mood**: "add feature", not "added feature" or "adds feature"
+- Stay under **72 characters**
+- Start with a **lowercase letter**
+- Have **no period** at the end
+
+## Body
+
+Use the body to explain the **why**, not the what. The diff shows what changed; the body is your chance to explain the reasoning, trade-offs, or context that will save a future engineer (probably you) from re-learning the same lesson.
+
+- Separate the body from the subject with a **blank line**
+- Wrap lines at **72 characters**
+- Write in full sentences
+
+## Footer
+
+Footers appear after another blank line following the body. Two footer tokens matter to our tooling:
+
+- **`BREAKING CHANGE:`** — signals an incompatible API change. Include a description of what broke and what the migration path is. This bumps the major version in semantic versioning.
+- **`Closes #123`** / **`Refs #123`** — links the commit to a GitHub issue. `Closes` will auto-close the issue on merge; `Refs` leaves it open but creates a reference.
+
+## A Well-Formed Commit Message
+
+```
+feat(auth): add refresh token rotation on silent re-auth
+
+Previously, the access token was refreshed using a long-lived static
+refresh token. This meant a compromised refresh token could be reused
+indefinitely. Rotation issues a new refresh token on every silent
+re-auth and invalidates the previous one server-side.
+
+The feature is gated behind the ENABLE_TOKEN_ROTATION env flag for
+the current release cycle to allow staged rollout.
+
+Closes #489
+```
+
+## Bad vs. Good Examples
+
+<Accordion title="Bad commit messages — and how to fix them">
+
+**Too vague — tells you nothing**
+```
+# Bad
+fix stuff
+
+# Good
+fix(basket): prevent negative quantity on decrement
+```
+
+---
+
+**Past tense — breaks imperative mood convention**
+```
+# Bad
+feat(profile): added avatar upload to user settings
+
+# Good
+feat(profile): add avatar upload to user settings
+```
+
+---
+
+**Subject line over 72 characters — gets truncated in git log**
+```
+# Bad
+feat(checkout): add support for the new Stripe Payment Element integration replacing the legacy Charges API
+
+# Good
+feat(checkout): migrate to Stripe Payment Element from Charges API
+```
+
+---
+
+**No context on a tricky change**
+```
+# Bad
+refactor(api): rewrite request handler
+
+# Good
+refactor(api): replace express middleware chain with explicit pipeline
+
+The previous middleware chain relied on implicit ordering and silent
+catch-all error suppression, making request tracing very difficult.
+The explicit pipeline surfaces errors at each stage and is compatible
+with our OpenTelemetry instrumentation.
+
+Refs #501
+```
+
+---
+
+**Missing `BREAKING CHANGE` footer**
+```
+# Bad
+feat(config): rename DATABASE_URL to DB_CONNECTION_STRING
+
+# Good
+feat(config): rename DATABASE_URL to DB_CONNECTION_STRING
+
+BREAKING CHANGE: The DATABASE_URL environment variable has been
+renamed to DB_CONNECTION_STRING to align with the multi-database
+configuration schema. Update all .env files and deployment configs
+before upgrading.
+```
+
+</Accordion>
+
+## Amending and Rewriting Before Merge
+
+Before you open a pull request, clean up your commit history so every commit is logical and well-formed.
+
+```bash
+# Amend the most recent commit message
+git commit --amend
+
+# Interactively rebase the last N commits to reword, squash, or reorder
+git rebase -i HEAD~3
+```
+
+Once a branch is under review, avoid force-pushing unless you have confirmed with the reviewer that they are not mid-review. After merge, history is immutable — you cannot fix it.

@@ -1,0 +1,184 @@
+---
+title: "Frontend Component Design and Reuse Guidelines"
+sidebarTitle: "Components"
+description: "How to structure, name, and build React components using atomic design, proper prop interfaces, composition patterns, and accessibility requirements."
+---
+
+Well-designed components are the foundation of a maintainable frontend codebase. The guidelines on this page define how components should be structured, where they should live, how their props should be typed, and what accessibility baseline every component must meet. Following these conventions means any team member can orient themselves in the codebase in seconds and reuse existing work rather than rebuilding it.
+
+<Tip>
+  Before building any new component, check the internal Storybook at [http://storybook.internal.your-org.com](http://storybook.internal.your-org.com). The component you need may already exist. If a primitive is missing from Storybook but would be broadly useful, build it in `src/components/ui/` and add a story before using it in a feature.
+</Tip>
+
+## Atomic Design Principles
+
+Organise components using atomic design levels. Each level builds on the one below it — resist the temptation to skip levels or create monolithic components.
+
+| Level | Description | Examples |
+|---|---|---|
+| **Atom** | Smallest indivisible UI primitives | `Button`, `Input`, `Badge`, `Icon` |
+| **Molecule** | Simple groups of atoms with a single purpose | `SearchBar`, `FormField`, `AvatarWithName` |
+| **Organism** | Complex UI sections composed of molecules | `NavigationBar`, `UserProfileCard`, `DataTable` |
+| **Page / Template** | Full page layouts assembled from organisms | `DashboardPage`, `SettingsLayout` |
+
+When you are unsure which level a component belongs to, ask: *can it be broken into smaller reusable parts?* If yes, break it down first.
+
+## Folder Structure
+
+```
+src/
+└── components/
+    ├── ui/               ← Atoms and generic molecules (design-system level)
+    │   ├── Button/
+    │   │   ├── Button.tsx
+    │   │   ├── Button.module.css
+    │   │   ├── Button.test.tsx
+    │   │   ├── Button.stories.tsx
+    │   │   └── index.ts
+    │   └── Input/
+    │       └── ...
+    └── features/         ← Organisms and molecules tied to a specific domain
+        ├── UserProfile/
+        │   ├── UserProfileCard.tsx
+        │   ├── UserProfileCard.test.tsx
+        │   └── index.ts
+        └── Billing/
+            └── ...
+```
+
+- Place anything that could appear in the design system under `ui/`.
+- Place anything that depends on application-specific data, routing, or stores under `features/`.
+- Every component folder must have an `index.ts` that re-exports the component so consumers import from the folder name, not the internal file path.
+
+## Prop Interface Naming
+
+Name every component's prop interface `<ComponentName>Props`. This convention is enforced by an ESLint rule and makes it trivially easy to find the prop definition with a global search.
+
+```ts
+// ✅ Correct
+export interface ButtonProps { ... }
+export function Button(props: ButtonProps) { ... }
+
+// ❌ Incorrect — don't use these patterns
+interface Props { ... }
+interface IButtonProps { ... }
+type ButtonPropsType = { ... }
+```
+
+Declare required props without a default value. Declare optional props with `?` and provide a sensible default in the destructured parameter list.
+
+## Well-Structured Component Example
+
+The following `Button` component demonstrates the full set of conventions: typed props interface, named export, CSS Module, accessible ARIA attributes, and a forwarded ref for consumers that need DOM access.
+
+```tsx
+// src/components/ui/Button/Button.tsx
+import { forwardRef } from 'react';
+import styles from './Button.module.css';
+
+export interface ButtonProps
+  extends React.ButtonHTMLAttributes<HTMLButtonElement> {
+  /** Visual style variant */
+  variant?: 'primary' | 'secondary' | 'destructive';
+  /** Renders a smaller button */
+  size?: 'sm' | 'md' | 'lg';
+  /** Displays a loading spinner and disables interaction */
+  isLoading?: boolean;
+}
+
+export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
+  function Button(
+    {
+      variant = 'primary',
+      size = 'md',
+      isLoading = false,
+      disabled,
+      children,
+      className,
+      ...rest
+    },
+    ref
+  ) {
+    return (
+      <button
+        ref={ref}
+        disabled={disabled || isLoading}
+        aria-busy={isLoading}
+        aria-disabled={disabled || isLoading}
+        className={[
+          styles.button,
+          styles[variant],
+          styles[size],
+          isLoading ? styles.loading : '',
+          className,
+        ]
+          .filter(Boolean)
+          .join(' ')}
+        {...rest}
+      >
+        {isLoading ? <span aria-hidden="true" className={styles.spinner} /> : null}
+        <span className={isLoading ? styles.hiddenLabel : undefined}>
+          {children}
+        </span>
+      </button>
+    );
+  }
+);
+```
+
+## Avoiding Prop Drilling
+
+Passing props through more than two levels of intermediary components ("prop drilling") makes components brittle and hard to refactor. Use one of these patterns instead.
+
+**Composition** — pass children or render props so the parent assembles the structure directly:
+
+```tsx
+// Instead of drilling `title` and `action` through multiple layers:
+<Card>
+  <Card.Header title="Users" action={<Button>Add user</Button>} />
+  <Card.Body>...</Card.Body>
+</Card>
+```
+
+**React Context** — for values that many components at different nesting levels need to read (current user, theme, locale). Keep context values stable to avoid unnecessary re-renders; split a context if only part of it changes frequently.
+
+```tsx
+// contexts/CurrentUserContext.tsx
+export const CurrentUserContext = createContext<User | null>(null);
+
+export function useCurrentUser() {
+  const user = useContext(CurrentUserContext);
+  if (user === null) throw new Error('useCurrentUser must be used inside CurrentUserProvider');
+  return user;
+}
+```
+
+Avoid putting rapidly-changing values (e.g. mouse coordinates, scroll position) in context — use a Zustand store for those instead.
+
+## Accessibility Baseline
+
+Every component you ship must meet these minimum requirements. Accessibility is a correctness requirement, not an optional enhancement.
+
+<Accordion title="ARIA labels">
+  Interactive elements that do not have visible text (icon buttons, close buttons, toggles) must have an `aria-label` or `aria-labelledby`. Test with a screen reader — VoiceOver (macOS/iOS) and NVDA (Windows) are both available to the team.
+
+  ```tsx
+  // ❌ Icon-only button with no label
+  <button onClick={onClose}><CloseIcon /></button>
+
+  // ✅ Labelled icon button
+  <button onClick={onClose} aria-label="Close dialog"><CloseIcon aria-hidden="true" /></button>
+  ```
+</Accordion>
+
+<Accordion title="Keyboard navigation">
+  All interactive components must be reachable and operable via keyboard alone. Use native HTML elements (`<button>`, `<a>`, `<input>`) wherever possible — they get keyboard support for free. If you build a custom interactive widget, implement the correct [ARIA pattern](https://www.w3.org/WAI/ARIA/apg/patterns/) including `tabIndex`, `onKeyDown` handlers, and focus management.
+</Accordion>
+
+<Accordion title="Colour contrast">
+  Text and interactive elements must meet WCAG AA contrast ratios: **4.5:1** for normal text, **3:1** for large text and UI components. Use the [Contrast checker in Figma](https://www.figma.com/community/plugin/734693888dragdrop) or the browser DevTools accessibility panel when picking colours. Never use colour alone to convey meaning.
+</Accordion>
+
+<Accordion title="Focus indicators">
+  Never remove the default focus ring with `outline: none` without replacing it with a custom, clearly visible focus style. Our design tokens include a `--focus-ring` CSS variable — always use it for custom focus styles.
+</Accordion>

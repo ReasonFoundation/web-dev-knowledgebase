@@ -1,0 +1,146 @@
+---
+title: "Pull Request Guidelines: Size, Description, and Merging"
+sidebarTitle: "Pull Requests"
+description: "How to open, describe, and merge pull requests — covering PR size limits, stacked PRs, required checks, merge strategies, and how to handle review feedback."
+---
+
+A pull request is your primary communication channel with the rest of the team. A well-scoped PR with a clear description gets reviewed quickly, merged confidently, and leaves a useful paper trail. An oversized or poorly described PR stalls in review, accumulates comments, and ends up merged with fingers crossed. The guidelines below exist to keep code review fast and focused.
+
+## PR Size
+
+Keep every pull request under **400 lines changed** (additions + deletions, excluding auto-generated files and lockfiles). Smaller PRs are reviewed more thoroughly, catch more bugs, and create less cognitive load for the reviewer.
+
+If a feature naturally exceeds 400 lines, split it into **stacked PRs**:
+
+1. Open a base branch from `main` — e.g. `feature/TICKET-123-oauth-base`.
+2. Open child branches from the base — e.g. `feature/TICKET-123-oauth-provider`, `feature/TICKET-123-oauth-callback`.
+3. Each child PR targets the branch below it, not `main` directly.
+4. Merge from the bottom of the stack up once the base is approved.
+
+GitHub's PR diff view shows line counts in the **Files changed** tab. Aim to see a green bar, not a wall of red.
+
+## PR Title Format
+
+Use the same format as your commit messages: `type(scope): description`.
+
+```
+feat(auth): add OAuth2 login with Google provider
+fix(checkout): correct VAT rounding for Irish addresses
+chore(deps): bump next from 14.1.0 to 14.2.3
+```
+
+The title becomes the squash-merge commit message on `main`, so it feeds directly into the auto-generated changelog. A vague title like "WIP fixes" will appear verbatim in the release notes.
+
+## PR Description Template
+
+Every pull request must include a description. Copy the template below into your PR body when you open it.
+
+```markdown
+## What
+<!-- A brief summary of the change. One to three sentences. -->
+
+## Why
+<!-- The problem this solves, or the ticket/requirement driving it. -->
+
+## How
+<!-- Key implementation decisions, architecture choices, or anything non-obvious. -->
+
+## Testing
+<!-- How did you verify this works? Unit tests, manual steps, staging URL, etc. -->
+
+## Screenshots
+<!-- For UI changes, before/after screenshots or a screen recording. Delete if not applicable. -->
+
+---
+Closes #
+```
+
+Fill in every section. If a section genuinely does not apply (e.g. Screenshots for a backend-only change), write a short note rather than deleting the heading — it shows the reviewer you considered it.
+
+## Linking to Tickets
+
+Always link your PR to the relevant ticket using GitHub's closing keywords in the description body (not the title).
+
+```
+Closes #123       ← closes the issue automatically on merge
+Refs #456         ← creates a reference without closing the issue
+```
+
+Use `Closes` when the PR fully resolves the ticket. Use `Refs` for partial work, follow-up PRs, or when the ticket tracks a broader epic.
+
+## Required Checks
+
+A PR cannot be merged until all of the following pass:
+
+- **CI pipeline green** — all test suites and build steps pass
+- **Lint passing** — no ESLint or Stylelint errors (warnings are allowed, fix them anyway)
+- **At least 1 approval** — from a team member who did not author the PR
+
+For PRs touching authentication, payments, or infrastructure configuration, **2 approvals** are required. The CODEOWNERS file enforces the right reviewers automatically.
+
+## Merge Strategy
+
+<Note>
+We use **squash merge** for feature and hotfix branches, and **merge commit** for release branches. Do not use rebase merge — it rewrites SHAs and breaks the link between PRs and commits in the GitHub UI.
+</Note>
+
+| Branch type | Merge strategy | Result on `main` |
+|---|---|---|
+| `feature/*` | Squash merge | One clean commit per PR |
+| `hotfix/*` | Squash merge | One clean commit per PR |
+| `release/*` | Merge commit | Preserves release branch history |
+
+When squash merging, GitHub pre-fills the commit message with the PR title and a list of individual commits. **Edit this message** — delete the commit list and write a single, well-formed Conventional Commit message that represents the whole PR.
+
+## PR Lifecycle
+
+<Steps>
+  <Step title="Open the PR early">
+    Push your branch and open a **draft PR** as soon as you have something runnable, even if it is incomplete. This signals to the team that the work is in progress and lets CI start running. Add the `WIP` label.
+  </Step>
+  <Step title="Fill in the description">
+    Complete every section of the PR description template. Attach screenshots for UI changes. Link to the relevant ticket with `Closes #` or `Refs #`.
+  </Step>
+  <Step title="Mark as ready for review">
+    Convert the draft to **Ready for review**, remove the `WIP` label, and assign reviewers (or let CODEOWNERS auto-assign). Post a link in the team Slack channel for time-sensitive PRs.
+  </Step>
+  <Step title="Address review feedback">
+    For every comment left by a reviewer, either make the change and reply with a brief note explaining what you did, or leave a reply explaining why you disagree and suggest an alternative. Do not silently resolve conversations. Once all comments are addressed, click **Re-request review** on each reviewer — do not assume they will notice on their own.
+  </Step>
+  <Step title="Ensure checks pass">
+    Confirm that CI is green, lint is passing, and you have at least one approval. If new commits have been pushed to `main` since you last rebased, rebase your branch before merging.
+  </Step>
+  <Step title="Squash and merge">
+    Click **Squash and merge**. Edit the auto-generated commit message to match the Conventional Commits format. Confirm the merge. GitHub will automatically delete your branch if the repo setting is enabled.
+  </Step>
+</Steps>
+
+## Handling Review Feedback
+
+Address **every** comment before re-requesting review — even ones you plan to defer. If you are deferring a suggestion to a follow-up ticket, say so explicitly and include the ticket number in your reply.
+
+If a review comment is purely advisory ("nit:"), you can mark it resolved without a code change, but reply to acknowledge you read it. Unacknowledged comments slow reviews down because the reviewer must re-read the thread to see if they were missed.
+
+Never force-push to a branch that is under active review without warning the reviewer first. A force push resets their review state in GitHub and can cause their in-progress comments to be lost.
+
+## Opening PRs from the CLI
+
+<Tip>
+Use the GitHub CLI to open PRs without leaving your terminal. Running `gh pr create --fill` pre-populates the title and body from your branch name and commit messages — faster than navigating the GitHub UI.
+
+```bash
+# Interactive prompt — lets you set title, body, reviewers, and labels
+gh pr create
+
+# Open a draft PR with title and body pre-filled from commits
+gh pr create --draft --fill
+
+# Specify title, body file, and reviewer in one command
+gh pr create \
+  --title "feat(auth): add OAuth2 login with Google provider" \
+  --body-file .github/PULL_REQUEST_TEMPLATE.md \
+  --reviewer @org/frontend-team
+```
+
+Install the CLI with `brew install gh` and authenticate with `gh auth login`.
+</Tip>
