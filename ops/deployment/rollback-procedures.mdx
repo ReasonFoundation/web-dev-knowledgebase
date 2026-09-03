@@ -27,7 +27,7 @@ This is the fastest path. It reverts the `k8s-manifests` change and lets ArgoCD 
   </Step>
   <Step title="Revert the manifest commit">
     ```bash
-    git clone git@github.com:your-org/k8s-manifests.git
+    git clone git@github.com:acme-corp/k8s-manifests.git
     cd k8s-manifests
     git revert <bad-commit-sha> --no-edit
     git push origin main

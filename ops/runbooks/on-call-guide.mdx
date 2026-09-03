@@ -1,7 +1,7 @@
 ---
 title: "On-Call Guide: Responsibilities, Tools, and Handoffs"
 sidebarTitle: "On-Call Guide"
-description: "Everything you need to carry a successful on-call shift: schedule expectations, escalation paths, required tooling, and how to hand off cleanly to the next engineer."
+description: "What you need for a successful on-call shift: schedule expectations, escalation paths, required tooling, and how to hand off cleanly to the next engineer."
 ---
 
 Being on call is a shared responsibility that keeps the team's services running for customers around the clock. This guide covers everything you need before, during, and after your shift — from confirming your tooling is ready to writing a thorough handoff that sets the next engineer up for success. Read this page before your first on-call shift and review it any time you need a refresher.
@@ -34,8 +34,8 @@ Run through this checklist at the beginning of every shift. Catching a broken to
     Connect to the VPN and confirm you can reach internal services. If your VPN certificate has expired, contact the `#ops-help` Slack channel to rotate it before your shift begins.
 
     ```bash
-    # Quick connectivity check once VPN is up
-    curl -sf https://internal.example.com/healthz && echo "VPN OK"
+    # Quick connectivity check once VPN is up — replace with an internal healthcheck endpoint
+    curl -sf https://<internal-service>/healthz && echo "VPN OK"
     ```
   </Step>
 
@@ -120,13 +120,13 @@ Period: 2024-06-10 09:00 UTC – 2024-06-17 09:00 UTC
 ## Key Tools
 
 <CardGroup cols={2}>
-  <Card title="PagerDuty" icon="bell" href="https://yourorg.pagerduty.com">
+  <Card title="PagerDuty" icon="bell" href="https://app.pagerduty.com">
     Manage your on-call schedule, acknowledge alerts, and view escalation policies. Install the mobile app and enable push notifications before your first shift.
   </Card>
   <Card title="Datadog" icon="chart-line" href="https://app.datadoghq.com">
     Primary observability platform. Use it for dashboards, log search, APM traces, and alert history. Bookmark the Ops Overview dashboard.
   </Card>
-  <Card title="ArgoCD" icon="code-branch" href="https://argocd.internal.example.com">
+  <Card title="ArgoCD" icon="code-branch" href="https://argocd.internal">
     GitOps deployment dashboard. Use it to check deployment status, view sync errors, and roll back to a previous revision during an incident.
   </Card>
   <Card title="AWS Console" icon="cloud" href="https://console.aws.amazon.com">

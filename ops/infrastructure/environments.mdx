@@ -50,7 +50,7 @@ All environment-specific configuration — database connection strings, API keys
 /dev/api-service/STRIPE_SECRET_KEY
 ```
 
-**Do not store secrets in `.env` files inside repositories.** Even `.env.example` files must contain only placeholder values, never real credentials. Applications read their config at startup via the SSM SDK or via environment variables injected by the EKS pod spec. If you need to add a new config value, follow the [SSM parameter guide](/ops/infrastructure/environments) and update the relevant pod spec.
+**Do not store secrets in `.env` files inside repositories.** Even `.env.example` files must contain only placeholder values, never real credentials. Applications read their config at startup via the SSM SDK or via environment variables injected by the EKS pod spec. If you need to add a new config value, follow the SSM parameter naming convention described above and update the relevant pod spec.
 
 ## Accessing Environments for Debugging
 

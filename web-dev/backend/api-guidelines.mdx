@@ -1,5 +1,5 @@
 ---
-title: "REST API Design Guidelines and Naming Conventions"
+title: "REST API Design: Guidelines and Naming Conventions"
 sidebarTitle: "API Guidelines"
 description: "Standards for designing consistent, predictable REST APIs — covering resource naming, HTTP semantics, versioning, response envelopes, and error handling."
 ---
@@ -50,8 +50,8 @@ Use HTTP methods according to their standard semantics. If an endpoint does not 
 All routes must be prefixed with a version segment (`/v1/`, `/v2/`, etc.). Never remove or change the behaviour of an existing versioned route — introduce a new version instead.
 
 ```
-https://api.your-org.com/v1/user-profiles
-https://api.your-org.com/v2/user-profiles   ← breaking change goes here
+https://api.acme.internal/v1/user-profiles
+https://api.acme.internal/v2/user-profiles   ← breaking change goes here
 ```
 
 Increment the major version only for **breaking changes** (removed fields, changed types, altered behaviour). Non-breaking additions (new optional fields, new endpoints) can ship within the same version.
@@ -172,7 +172,7 @@ Return errors in this structure regardless of status code:
 
 ```http
 POST /api/v1/user-profiles HTTP/1.1
-Host: api.your-org.com
+Host: api.acme.internal
 Authorization: Bearer eyJhbGci...
 Content-Type: application/json
 

@@ -1,7 +1,7 @@
 ---
 title: "Structured Logging: Standards, Levels, and Querying"
 sidebarTitle: "Logging"
-description: "Logging standards for all services — required JSON format, log levels, PII rules, how to implement structured logging in Node.js and Python, and querying in Datadog."
+description: "Logging standards for all services — required JSON format, log levels, PII handling, structured logging in Node.js and Python, and querying in Datadog."
 ---
 
 Consistent, structured logging is what separates a system you can debug in minutes from one you spend hours grepping through. Every service in our stack writes JSON-structured logs to stdout, and the Datadog agent ships them with trace correlation intact. Follow the standards on this page and your logs will be queryable, filterable, and linked to traces automatically from day one.
@@ -224,6 +224,6 @@ Use **Saved Views** to store queries you run regularly — click the bookmark ic
 | Tier | Duration | Storage |
 |---|---|---|
 | Hot (Datadog indexed) | 30 days | Datadog — fully queryable with live search |
-| Cold (archive) | 1 year | S3 (`s3://your-org-log-archive/`) |
+| Cold (archive) | 1 year | S3 (`s3://log-archive-production/` — see platform team for bucket name) |
 
 After 30 days, logs are flushed from Datadog's index but remain in S3. To query cold logs, use the **Datadog Log Rehydration** feature — open Log Explorer, click **Rehydrate from Archive**, select the time range and index filter, and wait for the rehydration job to complete (typically 10–30 minutes depending on volume). Rehydrated logs are billed separately from indexed logs, so scope your time range as narrowly as possible.

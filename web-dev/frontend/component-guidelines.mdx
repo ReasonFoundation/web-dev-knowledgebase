@@ -1,5 +1,5 @@
 ---
-title: "Frontend Component Design and Reuse Guidelines"
+title: "React Component Design, Structure, and Reuse Guidelines"
 sidebarTitle: "Components"
 description: "How to structure, name, and build React components using atomic design, proper prop interfaces, composition patterns, and accessibility requirements."
 ---
@@ -7,7 +7,7 @@ description: "How to structure, name, and build React components using atomic de
 Well-designed components are the foundation of a maintainable frontend codebase. The guidelines on this page define how components should be structured, where they should live, how their props should be typed, and what accessibility baseline every component must meet. Following these conventions means any team member can orient themselves in the codebase in seconds and reuse existing work rather than rebuilding it.
 
 <Tip>
-  Before building any new component, check the internal Storybook at [http://storybook.internal.your-org.com](http://storybook.internal.your-org.com). The component you need may already exist. If a primitive is missing from Storybook but would be broadly useful, build it in `src/components/ui/` and add a story before using it in a feature.
+  Before building any new component, check the internal Storybook at [http://storybook.internal](http://storybook.internal). The component you need may already exist. If a primitive is missing from Storybook but would be broadly useful, build it in `src/components/ui/` and add a story before using it in a feature.
 </Tip>
 
 ## Atomic Design Principles

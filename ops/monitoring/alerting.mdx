@@ -1,7 +1,7 @@
 ---
 title: "Alert Configuration: Thresholds, Routing, and Escalation"
 sidebarTitle: "Alerting"
-description: "How production alerts are defined, routed, and escalated — including standard thresholds, PagerDuty policies, creating new alerts, and managing maintenance windows."
+description: "How production alerts are defined, routed, and escalated — standard thresholds, PagerDuty policies, creating monitors, and managing maintenance windows."
 ---
 
 Alerts are the bridge between your observability data and the humans who need to act on it. A well-tuned alert fires only when a real problem needs attention, routes to the right person immediately, and includes enough context to start the investigation without opening five browser tabs. This page explains how alerts are structured in our stack, how to create new ones, and how to manage them responsibly.
@@ -92,7 +92,7 @@ All alert changes go through code review. Open a pull request against the `monit
     Value: {{value}} | Threshold: {{threshold}}
 
     Runbook: https://kb.internal.example.com/ops/deployment/rollback-procedures
-    Dashboard: https://app.datadoghq.com/dashboard/your-service-dashboard
+    Dashboard: https://app.datadoghq.com/dashboard/lists (search for your service name)
     {{/is_alert}}
 
     {{#is_recovery}}

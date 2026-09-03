@@ -1,7 +1,7 @@
 ---
 title: "Backend Authentication: JWT, API Keys, and Sessions"
 sidebarTitle: "Authentication"
-description: "How our services authenticate users and each other — JWT token lifecycle, service-to-service API keys, token validation rules, and handling auth errors correctly."
+description: "How our services handle authentication — JWT lifecycle, service-to-service API keys, token validation rules, and responding correctly to auth errors."
 ---
 
 Authentication is one of the most security-sensitive areas of any service. We use a small, well-defined set of mechanisms across all backends so that every developer knows exactly what to expect when picking up a new service. Read this page in full before adding any auth-related code to a service.
@@ -11,12 +11,12 @@ Authentication is one of the most security-sensitive areas of any service. We us
 </Note>
 
 <Tip>
-  Use the shared `@your-org/auth-middleware` package instead of writing token validation from scratch. It handles signature verification, claim checking, error responses, and clock skew for you. Add it with `npm install @your-org/auth-middleware` (Node) or `pip install your-org-auth-middleware` (Python) and follow its README for integration.
+  Use the shared `@acme/auth-middleware` package instead of writing token validation from scratch. It handles signature verification, claim checking, error responses, and clock skew for you. Add it with `npm install @acme/auth-middleware` (Node) or `pip install acme-auth-middleware` (Python) and follow its README for integration.
 </Tip>
 
 ## User-Facing Authentication (JWT)
 
-User-facing services authenticate via **JSON Web Tokens** issued by the central auth service at `auth.your-org.internal`.
+User-facing services authenticate via **JSON Web Tokens** issued by the central auth service at `auth.acme.internal`.
 
 **Token lifecycle:**
 
@@ -32,7 +32,7 @@ GET /api/v1/user-profiles/42 HTTP/1.1
 Authorization: Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...
 ```
 
-Services **never issue tokens themselves** — all token issuance goes through the auth service. If a user's access token expires, the client calls `POST /auth/v1/token/refresh` with the refresh token cookie to get a new access token.
+Services **never issue tokens themselves** — all token issuance goes through the auth service. If a user's access token expires, the client calls `POST /auth/v1/token/refresh` with the refresh token cookie to obtain a new access token.
 
 ## Service-to-Service Authentication (API Keys)
 
@@ -46,7 +46,7 @@ Pass the API key using the `X-API-Key` header:
 
 ```http
 POST /api/v1/notifications/send HTTP/1.1
-Host: notifications.your-org.internal
+Host: notifications.acme.internal
 X-API-Key: sk_internal_4f8a2b...
 Content-Type: application/json
 ```
@@ -63,7 +63,7 @@ INTERNAL_API_KEY=sk_internal_4f8a2b...
 Our APIs are **stateless** — there are no server-side sessions. Access tokens are short-lived and verified by each service independently using the auth service's public signing key, which is published at:
 
 ```
-https://auth.your-org.internal/.well-known/jwks.json
+https://auth.acme.internal/.well-known/jwks.json
 ```
 
 Do not store session state in Redis or a database unless you have a documented reason (e.g. a real-time WebSocket service that must track connected clients). Discuss with `#backend` first.
@@ -74,24 +74,24 @@ Every service must validate the following on every inbound JWT, in this order:
 
 1. **Signature** — verify against the JWKS endpoint public key.
 2. **Expiry (`exp`)** — reject tokens that have expired; allow up to 30 seconds of clock skew.
-3. **Issuer (`iss`)** — must equal `https://auth.your-org.internal`.
-4. **Audience (`aud`)** — must include your service's registered audience identifier (e.g. `api.your-org.com`).
+3. **Issuer (`iss`)** — must equal `https://auth.acme.internal`.
+4. **Audience (`aud`)** — must include your service's registered audience identifier (e.g. `api.acme.internal`).
 
 <Tabs>
   <Tab title="Node.js">
-    Using `@your-org/auth-middleware` (recommended):
+    Using `@acme/auth-middleware` (recommended):
 
     ```typescript
-    import { requireAuth } from '@your-org/auth-middleware';
+    import { requireAuth } from '@acme/auth-middleware';
     import express from 'express';
 
     const app = express();
 
     // Apply globally — all routes below this line require a valid JWT
     app.use(requireAuth({
-      audience: 'api.your-org.com',
-      issuer: 'https://auth.your-org.internal',
-      jwksUri: 'https://auth.your-org.internal/.well-known/jwks.json',
+      audience: 'api.acme.internal',
+      issuer: 'https://auth.acme.internal',
+      jwksUri: 'https://auth.acme.internal/.well-known/jwks.json',
     }));
     ```
 
@@ -101,13 +101,13 @@ Every service must validate the following on every inbound JWT, in this order:
     import { createRemoteJWKSet, jwtVerify } from 'jose';
 
     const JWKS = createRemoteJWKSet(
-      new URL('https://auth.your-org.internal/.well-known/jwks.json')
+      new URL('https://auth.acme.internal/.well-known/jwks.json')
     );
 
     async function verifyToken(token: string) {
       const { payload } = await jwtVerify(token, JWKS, {
-        issuer: 'https://auth.your-org.internal',
-        audience: 'api.your-org.com',
+        issuer: 'https://auth.acme.internal',
+        audience: 'api.acme.internal',
         clockTolerance: 30, // seconds
       });
       return payload; // { sub, email, role, iat, exp, iss, aud }
@@ -115,19 +115,19 @@ Every service must validate the following on every inbound JWT, in this order:
     ```
   </Tab>
   <Tab title="Python">
-    Using `your-org-auth-middleware` (recommended):
+    Using `acme-auth-middleware` (recommended):
 
     ```python
     from fastapi import FastAPI
-    from your_org_auth_middleware import AuthMiddleware
+    from acme_auth_middleware import AuthMiddleware
 
     app = FastAPI()
 
     app.add_middleware(
         AuthMiddleware,
-        audience="api.your-org.com",
-        issuer="https://auth.your-org.internal",
-        jwks_uri="https://auth.your-org.internal/.well-known/jwks.json",
+        audience="api.acme.internal",
+        issuer="https://auth.acme.internal",
+        jwks_uri="https://auth.acme.internal/.well-known/jwks.json",
     )
     ```
 
@@ -140,7 +140,7 @@ Every service must validate the following on every inbound JWT, in this order:
 
     async def get_jwks() -> dict:
         async with httpx.AsyncClient() as client:
-            r = await client.get("https://auth.your-org.internal/.well-known/jwks.json")
+            r = await client.get("https://auth.acme.internal/.well-known/jwks.json")
             return r.json()
 
     async def verify_token(token: str) -> dict:
@@ -150,8 +150,8 @@ Every service must validate the following on every inbound JWT, in this order:
                 token,
                 jwks,
                 algorithms=["RS256"],
-                audience="api.your-org.com",
-                issuer="https://auth.your-org.internal",
+                audience="api.acme.internal",
+                issuer="https://auth.acme.internal",
                 options={"leeway": 30},  # 30s clock tolerance
             )
         except ExpiredSignatureError:
@@ -176,7 +176,7 @@ A `401` response must include a `WWW-Authenticate` header:
 
 ```http
 HTTP/1.1 401 Unauthorized
-WWW-Authenticate: Bearer realm="api.your-org.com", error="invalid_token"
+WWW-Authenticate: Bearer realm="api.acme.internal", error="invalid_token"
 Content-Type: application/json
 
 {
